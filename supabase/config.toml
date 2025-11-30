@@ -1,0 +1,4 @@
+project_id = "svoouqgxdiwryhjuvxlo"
+
+[functions.cleanup-old-messages]
+verify_jwt = false

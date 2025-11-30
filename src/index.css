@@ -1,0 +1,162 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
+All colors MUST be HSL.
+*/
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 0 0% 0%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 0%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 0%;
+
+    --primary: 265 54% 31%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 0 0% 15%;
+    --secondary-foreground: 0 0% 100%;
+
+    --muted: 0 0% 96%;
+    --muted-foreground: 0 0% 45%;
+
+    --accent: 265 54% 31%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 0 0% 90%;
+    --input: 0 0% 90%;
+    --ring: 265 54% 31%;
+
+    --radius: 0.5rem;
+
+    /* Anime-inspired colors */
+    --shonen-purple: 265 54% 31%;
+    --shonen-purple-light: 265 54% 45%;
+    --shonen-purple-dark: 265 54% 20%;
+    --shonen-black: 0 0% 0%;
+    --shonen-white: 0 0% 100%;
+    
+    /* Discipline colors */
+    --shadow: 265 54% 31%;
+    --all-seeing: 0 0% 50%;
+    --titan: 120 50% 40%;
+    --emperor: 210 80% 50%;
+    --finisher: 0 80% 50%;
+    --lightbringer: 30 100% 50%;
+
+    /* Effects */
+    --gradient-primary: linear-gradient(135deg, hsl(265 54% 31%), hsl(265 54% 45%));
+    --gradient-hero: linear-gradient(180deg, hsl(0 0% 0%), hsl(265 54% 20%));
+    --shadow-glow: 0 0 30px hsla(265, 54%, 31%, 0.5);
+    --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .dark {
+    --background: 0 0% 5%;
+    --foreground: 0 0% 100%;
+
+    --card: 0 0% 10%;
+    --card-foreground: 0 0% 100%;
+
+    --popover: 0 0% 10%;
+    --popover-foreground: 0 0% 100%;
+
+    --primary: 265 54% 45%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 0 0% 15%;
+    --secondary-foreground: 0 0% 100%;
+
+    --muted: 0 0% 20%;
+    --muted-foreground: 0 0% 65%;
+
+    --accent: 265 54% 45%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 62% 40%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 0 0% 20%;
+    --input: 0 0% 20%;
+    --ring: 265 54% 45%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* Rich text editor prose styling */
+@layer components {
+  .prose {
+    @apply text-foreground;
+  }
+  
+  .prose h2 {
+    @apply text-2xl font-bold mt-6 mb-4;
+  }
+  
+  .prose p {
+    @apply mb-4;
+  }
+  
+  .prose strong {
+    @apply font-bold;
+  }
+  
+  .prose em {
+    @apply italic;
+  }
+  
+  .prose u {
+    @apply underline;
+  }
+  
+  .prose ul {
+    @apply list-disc list-inside mb-4 space-y-2;
+  }
+  
+  .prose ol {
+    @apply list-decimal list-inside mb-4 space-y-2;
+  }
+  
+  .prose li {
+    @apply ml-4;
+  }
+  
+  .prose img {
+    @apply rounded-lg my-4 max-w-full h-auto;
+  }
+  
+  .prose a {
+    @apply text-primary hover:underline;
+  }
+}
+
+/* TipTap editor specific styling */
+.ProseMirror {
+  @apply focus:outline-none min-h-[200px] p-4;
+}
+
+.ProseMirror p.is-editor-empty:first-child::before {
+  @apply text-muted-foreground;
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}
