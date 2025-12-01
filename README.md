@@ -53,6 +53,21 @@ To deploy this project:
 2. Upload the `dist` folder contents to your hosting provider (e.g., Hostinger)
 3. Configure your server to serve the built files
 
+**For detailed deployment instructions, see:**
+- `DEPLOYMENT_GUIDE.md` - Complete deployment guide
+- `CLIENT_WORKFLOW_GUIDE.md` - How to make changes and deploy
+- `AUTOMATED_DEPLOYMENT_SETUP.md` - Set up automatic deployment
+
 ## Project Structure
 
 The main application code is located in the `src` directory. The entry point is `src/main.tsx`, and the root component is rendered in `index.html`.
+
+## Making Changes & Deploying
+
+**Quick workflow:**
+1. Make changes → Edit code files
+2. Test locally → `npm run dev`
+3. Build → `npm run build`
+4. Deploy → Upload `dist` folder to Hostinger
+
+**See `CLIENT_WORKFLOW_GUIDE.md` for detailed instructions.**
