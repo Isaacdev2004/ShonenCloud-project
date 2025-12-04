@@ -643,21 +643,16 @@ const Arena = () => {
   };
 
   const getStatusOptions = () => {
-    const discipline = currentProfile?.discipline || "";
-    const evasionDescription = ["Shadow", "Emperor", "Finisher"].includes(discipline)
-      ? "Fully untargettable for 2 turns"
-      : "Absorb all attacks and convert to extra health next turn";
-
     return [
-      { value: "Observing zones", label: "Observing zones", description: "Watching the battlefield" },
-      { value: "Training", label: "Training", description: "Improving techniques" },
-      { value: "Resting", label: "Resting", description: "Recovering energy" },
-      { value: "Searching for opponents", label: "Searching for opponents", description: "Looking for a fight" },
-      { value: "Preparing techniques", label: "Preparing techniques", description: "Getting ready to attack" },
-      { value: "On guard", label: "On guard", description: "Defensive stance" },
-      { value: "Meditating", label: "Meditating", description: "Focusing energy" },
-      { value: "Ready to battle", label: "Ready to battle", description: "Fully prepared" },
-      { value: "Evasion Mode", label: "Evasion Mode", description: evasionDescription },
+      { value: "Dropping in", label: "Dropping in", description: "Now joining the fight" },
+      { value: "In an active fight", label: "In an active fight", description: "Fighting an opponent" },
+      { value: "Observing zones", label: "Observing zones", description: "Allows targeting of anyone anywhere" },
+      { value: "Setup in play", label: "Setup in play", description: "No Off and Def usable" },
+      { value: "Setup complete", label: "Setup complete", description: "Can now use Off and Def again" },
+      { value: "Completing a zone signature", label: "Completing a zone signature", description: "Must stay inactive for the # of turns" },
+      { value: "Stunned", label: "Stunned", description: "Cannot do anything" },
+      { value: "Hidden", label: "Hidden", description: "Only affected if revealed or by AOE" },
+      { value: "Evasion mode", label: "Evasion mode", description: "8 turns cooldown, costs half Energy" },
     ];
   };
 
