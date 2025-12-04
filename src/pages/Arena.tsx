@@ -786,18 +786,23 @@ const Arena = () => {
     // Handle selected action
     if (selectedAction === "change-zone") {
       techniqueName = techniqueData ? `${techniqueData.name} + Zone Change` : "Zone Change";
-      description += description ? "\n**Action:** I'm changing zones." : "**Action:** I'm changing zones.";
+      description += description ? "\n**Action:** I've decided to change zones. If uncontested, I will be far away next turn." : "**Action:** I've decided to change zones. If uncontested, I will be far away next turn.";
     } else if (selectedAction === "gather-energy") {
       techniqueName = techniqueData ? `${techniqueData.name} + Gather Energy` : "Gather Energy";
       description += description ? "\n**Action:** I gathered full energy." : "**Action:** I gathered full energy.";
     } else if (selectedAction === "move-around") {
       const moveMessages = [
-        "Moving to a better position.",
-        "Circling around the arena.",
-        "Repositioning for advantage.",
-        "Taking a tactical position.",
-        "Moving with purpose.",
-        "Shifting stance.",
+        "I found a lake, restoring 10 HP.",
+        "I found a +15 Armor item.",
+        "I found a Cloud Catalyzer...Game on !",
+        "I found a lake, restoring 20 HP.",
+        "Enemy found ! I choose.",
+        "Enemy found ! I choose.",
+        "Enemy found ! Highest stats.",
+        "Zone Signature",
+        "Zone Signature",
+        "Enemy found ! Lowest stats.",
+        "Stray Portal found, should I use it ?",
       ];
       const moveMessage = moveMessages[Math.floor(Math.random() * moveMessages.length)];
       techniqueName = techniqueData ? `${techniqueData.name} + Move Around` : "Move Around";
