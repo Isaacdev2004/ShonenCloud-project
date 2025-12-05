@@ -14,7 +14,7 @@ export const ZONE_IMAGES: Record<string, string> = {
   "Scrap Island": scrapIsland,
   "Musutafu": musutafu,
   "Hueco Mundo": huecoMundo,
-  "Chunin Exam Arena": chuninExam,
+  "Chunin Exam": chuninExam,
   "Baschool": baschool,
 };
 
