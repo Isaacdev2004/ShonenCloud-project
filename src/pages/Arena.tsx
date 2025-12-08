@@ -28,6 +28,17 @@ import { Badge } from "@/components/ui/badge";
 import { ZONE_IMAGE_LIST } from "@/constants/zoneImages";
 import arenaBanner from "@/assets/arena-banner.png";
 
+const zoneSignatureImages = [
+  { src: "https://i.ibb.co/tTkk6Mwy/Baschool-DONE.jpg", alt: "Baschool" },
+  { src: "https://i.ibb.co/PsBSSZ0s/Chunin-DONE.jpg", alt: "Chunin" },
+  { src: "https://i.ibb.co/vxzKKTpy/Hueco-DONE.jpg", alt: "Hueco" },
+  { src: "https://i.ibb.co/kgsBHd6h/Musutafu-DONE.jpg", alt: "Musutafu" },
+  { src: "https://i.ibb.co/wNrT6g4X/Namek-DONE2.jpg", alt: "Namek" },
+  { src: "https://i.ibb.co/9mk6mgfh/Scrap-DONE2.jpg", alt: "Scrap" },
+  { src: "https://i.ibb.co/TD7tdTSX/Shibuya-DONE.jpg", alt: "Shibuya" },
+  { src: "https://i.ibb.co/7JkkMy05/Testing-DONE.jpg", alt: "Testing" },
+];
+
 interface Profile {
   id: string;
   username: string;
