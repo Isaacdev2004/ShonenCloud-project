@@ -3,34 +3,34 @@ import { Badge } from "@/components/ui/badge";
 
 const DISCIPLINE_DETAILS: Record<string, { description: string; color: string; traits: string[] }> = {
   "Shadow": {
-    description: "Masters of stealth and darkness, Shadow disciples manipulate shadows to their advantage.",
+    description: "The less you see me the better. Well...The quicker you disappear.",
     color: "#432A76",
-    traits: ["Stealth", "Assassination", "Shadow Manipulation"]
+    traits: ["Surprise attacks", "Lethal", "Burst damage"]
   },
   "All-Seeing": {
-    description: "Possessors of incredible perception, they see through illusions and predict movements.",
+    description: "Everything is tactical. Your demise is not. It’s just another day for me.",
     color: "#808080",
-    traits: ["Enhanced Vision", "Prediction", "Analysis"]
+    traits: ["Planification", "Resourceful", "Diverse arsenal"]
   },
   "Titan": {
-    description: "Giants of raw strength and endurance, Titans dominate through sheer physical power.",
+    description: "To think that your attacks can even graze me...The delusion. Stop thinking.",
     color: "#00FF00",
-    traits: ["Super Strength", "Durability", "Size Manipulation"]
+    traits: ["Armor gain", "Extra health", "Melee"]
   },
   "Emperor": {
-    description: "Born leaders with commanding presence, they inspire and control those around them.",
+    description: "I own this, in its entirety. Play nice and I might allow you a casket.",
     color: "#0000FF",
-    traits: ["Leadership", "Charisma", "Command"]
+    traits: ["AOE", "GLOBAL", "Domination"]
   },
   "Finisher": {
-    description: "Specialists in decisive strikes, they end battles with overwhelming finishing moves.",
+    description: "I would never be on the defensive against your kind. Begone, puny one.",
     color: "#FF0000",
-    traits: ["Critical Strikes", "Execution", "Power Burst"]
+    traits: ["Heavy offensive", "High damage", "Attack buffs"]
   },
   "Lightbringer": {
-    description: "Wielders of radiant energy, they heal allies and smite enemies with holy light.",
+    description: "Killing me ? Ah…In your dreams. I’m already healed up from your next attack, fool.",
     color: "#FFA500",
-    traits: ["Healing", "Light Manipulation", "Purification"]
+    traits: ["Healing", "Diverse buffs", "Second chances"]
   }
 };
 

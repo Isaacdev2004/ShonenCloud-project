@@ -17,12 +17,12 @@ import { resolveProfileImage, mapMentorToProfileId, getProfilePictureForMentor }
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 const DISCIPLINES = [
-  { value: "Shadow", description: "Masters of stealth and hidden techniques", color: "hsl(var(--shadow))" },
-  { value: "All-Seeing", description: "Possess incredible perception and foresight", color: "hsl(var(--all-seeing))" },
-  { value: "Titan", description: "Unmatched strength and defensive power", color: "hsl(var(--titan))" },
-  { value: "Emperor", description: "Strategic minds with commanding presence", color: "hsl(var(--emperor))" },
-  { value: "Finisher", description: "Deadly precision and finishing moves", color: "hsl(var(--finisher))" },
-  { value: "Lightbringer", description: "Radiant energy and healing abilities", color: "hsl(var(--lightbringer))" },
+  { value: "Shadow", description: "Just like an assassin, sneaky and lethal", color: "hsl(var(--shadow))" },
+  { value: "All-Seeing", description: "Very tactical, composed and resourceful", color: "hsl(var(--all-seeing))" },
+  { value: "Titan", description: "Great defense and armored to the core", color: "hsl(var(--titan))" },
+  { value: "Emperor", description: "Area control and zone domination", color: "hsl(var(--emperor))" },
+  { value: "Finisher", description: "Assault focused and exceptional damage potential", color: "hsl(var(--finisher))" },
+  { value: "Lightbringer", description: "Self-Healing and mastery of survival", color: "hsl(var(--lightbringer))" },
 ];
 
 const Signup = () => {
