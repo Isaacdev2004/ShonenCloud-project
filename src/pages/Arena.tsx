@@ -96,6 +96,7 @@ const Arena = () => {
   const [unreadCount, setUnreadCount] = useState(0);
   const [showNotifications, setShowNotifications] = useState(false);
   const [currentTarget, setCurrentTarget] = useState<string | null>(null);
+  const [showZoneCodex, setShowZoneCodex] = useState(false);
 
   useEffect(() => {
     const fetchUser = async () => {
@@ -623,6 +624,17 @@ const Arena = () => {
   };
 
   const handleDeleteArenaPost = async (postId: string) => {
+  const zoneSignatureImages = [
+    { src: "https://i.ibb.co/tTkk6Mwy/Baschool-DONE.jpg", alt: "Baschool" },
+    { src: "https://i.ibb.co/PsBSSZ0s/Chunin-DONE.jpg", alt: "Chunin" },
+    { src: "https://i.ibb.co/vxzKKTpy/Hueco-DONE.jpg", alt: "Hueco" },
+    { src: "https://i.ibb.co/kgsBHd6h/Musutafu-DONE.jpg", alt: "Musutafu" },
+    { src: "https://i.ibb.co/wNrT6g4X/Namek-DONE2.jpg", alt: "Namek" },
+    { src: "https://i.ibb.co/9mk6mgfh/Scrap-DONE2.jpg", alt: "Scrap" },
+    { src: "https://i.ibb.co/TD7tdTSX/Shibuya-DONE.jpg", alt: "Shibuya" },
+    { src: "https://i.ibb.co/7JkkMy05/Testing-DONE.jpg", alt: "Testing" },
+  ];
+
     const { error } = await supabase
       .from("arena_posts")
       .delete()
@@ -1065,7 +1077,7 @@ const Arena = () => {
             {/* Section 3: Cloudopedia */}
             <div className="border-2 border-border rounded-lg p-6 bg-card">
               <div className="flex items-center gap-4 justify-between">
-                <div className="flex items-center gap-4">
+                <div className="flex items-center gap-4 flex-wrap">
                   <div className="w-16 h-16 rounded-full border-2 border-border flex items-center justify-center text-2xl font-bold">
                     3
                   </div>
@@ -1075,6 +1087,13 @@ const Arena = () => {
                     className="text-lg"
                   >
                     Cloudopedia
+                  </Button>
+                  <Button
+                    onClick={() => setShowZoneCodex(true)}
+                    variant="outline"
+                    className="text-lg"
+                  >
+                    Zone Signatures &amp; Codex
                   </Button>
                 </div>
                 
@@ -1249,6 +1268,44 @@ const Arena = () => {
           </div>
         </div>
       </div>
+
+      {/* Zone Signatures & Codex Dialog */}
+      <Dialog open={showZoneCodex} onOpenChange={setShowZoneCodex}>
+        <DialogContent className="max-w-6xl w-[90vw] max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Zone Signatures and Codex Titles</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 text-sm text-foreground">
+            <p>Use the horizontal scrollbar to see the other images.</p>
+            <div className="bg-[#333] overflow-x-auto whitespace-nowrap p-3 rounded-lg border border-border">
+              {zoneSignatureImages.map((img) => (
+                <img
+                  key={img.src}
+                  src={img.src}
+                  alt={img.alt}
+                  className="inline-block mr-2 h-[218px] w-[400px] object-cover rounded-md border border-border"
+                />
+              ))}
+            </div>
+            <p>
+              Remember, you must stay inactive for the amount of time mentioned to complete a zone signature. And below are the titles that can be purchased in The Yards. They last 48 hours and will automatically disappear from your profile.
+            </p>
+            <p>
+              <a
+                href="https://ibb.co/6R8nMb13"
+                target="_blank"
+                rel="noreferrer"
+              >
+                <img
+                  src="https://i.ibb.co/XZD2Qp3h/Codex-1st-wave.png"
+                  alt="Codex 1st wave"
+                  className="max-w-full h-auto rounded-md border border-border"
+                />
+              </a>
+            </p>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Take Action Dialog */}
       <Dialog open={showActionDialog} onOpenChange={setShowActionDialog}>
