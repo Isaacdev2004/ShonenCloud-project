@@ -27,6 +27,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { ZONE_IMAGE_LIST } from "@/constants/zoneImages";
 import arenaBanner from "@/assets/arena-banner.png";
+import adminProfilePic from "@/assets/profile-pics/WhatsApp Image 2025-12-08 at 9.25.53 AM.jpeg";
 
 const zoneSignatureImages = [
   { src: "https://i.ibb.co/tTkk6Mwy/Baschool-DONE.jpg", alt: "Baschool" },
@@ -38,6 +39,13 @@ const zoneSignatureImages = [
   { src: "https://i.ibb.co/TD7tdTSX/Shibuya-DONE.jpg", alt: "Shibuya" },
   { src: "https://i.ibb.co/7JkkMy05/Testing-DONE.jpg", alt: "Testing" },
 ];
+
+const getProfileAvatar = (username: string | undefined, url: string | undefined) => {
+  if (username === "Admin") {
+    return adminProfilePic;
+  }
+  return resolveProfileImage(url || "");
+};
 
 interface Profile {
   id: string;
@@ -916,11 +924,11 @@ const Arena = () => {
           <div className="lg:col-span-1">
             <div className="border-2 border-border rounded-lg p-6 bg-card">
               <div className="flex items-center gap-4 mb-4">
-                <Avatar className="w-16 h-16 border-2 border-primary">
-                  <AvatarImage
-                    src={resolveProfileImage(currentProfile?.profile_picture_url || "")}
-                    alt="Your profile"
-                  />
+                  <Avatar className="w-16 h-16 border-2 border-primary">
+                    <AvatarImage
+                      src={getProfileAvatar(currentProfile?.username, currentProfile?.profile_picture_url)}
+                      alt="Your profile"
+                    />
                   <AvatarFallback>
                     {currentProfile?.username?.substring(0, 2).toUpperCase() || "??"}
                   </AvatarFallback>
@@ -1013,7 +1021,7 @@ const Arena = () => {
                                       currentTarget === player.user_id ? 'border-destructive ring-2 ring-destructive' : 'border-border'
                                     }`}>
                                       <AvatarImage
-                                        src={resolveProfileImage(player.profiles.profile_picture_url)}
+                                        src={getProfileAvatar(player.profiles.username, player.profiles.profile_picture_url)}
                                         alt={player.profiles.username}
                                       />
                                       <AvatarFallback>
