@@ -358,9 +358,13 @@ const Arena = () => {
     }
 
     setCurrentZone(zoneId);
+    // Get zone name from image mapping instead of database
+    // Use the same index logic as the zone display to ensure consistency
+    const zoneIndex = zones.findIndex((z) => z.id === zoneId);
+    const zoneNameFromImage = zoneIndex !== -1 ? ZONE_IMAGE_NAMES[zoneIndex % ZONE_IMAGE_NAMES.length] : zones.find((z) => z.id === zoneId)?.name;
     toast({
       title: "Zone Changed",
-      description: `Moved to ${zones.find((z) => z.id === zoneId)?.name}`,
+      description: `Moved to ${zoneNameFromImage}`,
     });
   };
 

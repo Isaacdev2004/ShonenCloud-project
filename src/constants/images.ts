@@ -19,7 +19,7 @@ import cellProfile from "@/assets/profile-pics/cell.png";
 import c18Profile from "@/assets/profile-pics/c18.png";
 import aceProfile from "@/assets/profile-pics/ace.png";
 import bakugoProfile from "@/assets/profile-pics/bakugo.png";
-import adminProfile from "@/assets/profile-pics/WhatsApp Image 2025-12-08 at 9.25.53 AM.jpeg";
+import adminProfile from "@/assets/admin profile picture.jpeg";
 
 // Mentor Pictures
 import yujiMentor from "@/assets/mentor-pics/yuji.png";
