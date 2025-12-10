@@ -19,6 +19,7 @@ import cellProfile from "@/assets/profile-pics/cell.png";
 import c18Profile from "@/assets/profile-pics/c18.png";
 import aceProfile from "@/assets/profile-pics/ace.png";
 import bakugoProfile from "@/assets/profile-pics/bakugo.png";
+import adminProfile from "@/assets/profile-pics/WhatsApp Image 2025-12-08 at 9.25.53 AM.jpeg";
 
 // Mentor Pictures
 import yujiMentor from "@/assets/mentor-pics/yuji.png";
@@ -63,6 +64,7 @@ export const PROFILE_PICTURES = [
   { id: "c18", name: "Android 18", url: c18Profile },
   { id: "ace", name: "Ace", url: aceProfile },
   { id: "bakugo", name: "Bakugo", url: bakugoProfile },
+  { id: "admin", name: "Admin", url: adminProfile },
 ];
 
 export const MENTOR_IMAGES = {

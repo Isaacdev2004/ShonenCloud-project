@@ -25,9 +25,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { ZONE_IMAGE_LIST } from "@/constants/zoneImages";
-import arenaBanner from "@/assets/arena-banner.png";
-import adminProfilePic from "@/assets/profile-pics/WhatsApp Image 2025-12-08 at 9.25.53 AM.jpeg";
+import { ZONE_IMAGE_LIST, ZONE_IMAGE_NAMES } from "@/constants/zoneImages";
+import arenaBanner from "@/assets/Banner final (1).png";
 
 const zoneSignatureImages = [
   { src: "https://i.ibb.co/tTkk6Mwy/Baschool-DONE.jpg", alt: "Baschool" },
@@ -40,12 +39,6 @@ const zoneSignatureImages = [
   { src: "https://i.ibb.co/7JkkMy05/Testing-DONE.jpg", alt: "Testing" },
 ];
 
-const getProfileAvatar = (username: string | undefined, url: string | undefined) => {
-  if (username === "Admin") {
-    return adminProfilePic;
-  }
-  return resolveProfileImage(url || "");
-};
 
 interface Profile {
   id: string;
@@ -926,7 +919,7 @@ const Arena = () => {
               <div className="flex items-center gap-4 mb-4">
                   <Avatar className="w-16 h-16 border-2 border-primary">
                     <AvatarImage
-                      src={getProfileAvatar(currentProfile?.username, currentProfile?.profile_picture_url)}
+                      src={resolveProfileImage(currentProfile?.profile_picture_url, currentProfile?.username)}
                       alt="Your profile"
                     />
                   <AvatarFallback>
@@ -993,6 +986,7 @@ const Arena = () => {
                   const playersInZone = getPlayersInZone(zone.id);
                   const isCurrentZone = currentZone === zone.id;
                   const zoneImage = ZONE_IMAGE_LIST[index % ZONE_IMAGE_LIST.length];
+                  const zoneNameFromImage = ZONE_IMAGE_NAMES[index % ZONE_IMAGE_NAMES.length];
                   return (
                     <div key={zone.id}>
                       <div
@@ -1000,12 +994,16 @@ const Arena = () => {
                           isCurrentZone ? 'ring-4 ring-primary animate-pulse' : ''
                         }`}
                         onClick={() => handleZoneChange(zone.id)}
+                        title={zoneNameFromImage}
                       >
                         <img 
                           src={zoneImage} 
-                          alt={zone.name}
+                          alt={zoneNameFromImage}
                           className="w-[360px] h-[48px] rounded-lg border-2 border-border object-cover"
                         />
+                        <div className="absolute bottom-0 left-0 right-0 bg-black/70 text-white text-xs font-semibold px-2 py-1 rounded-b-lg text-center">
+                          {zoneNameFromImage}
+                        </div>
                       </div>
                       {playersInZone.length > 0 && (
                         <div className="flex flex-wrap gap-2 pl-4">
@@ -1021,7 +1019,7 @@ const Arena = () => {
                                       currentTarget === player.user_id ? 'border-destructive ring-2 ring-destructive' : 'border-border'
                                     }`}>
                                       <AvatarImage
-                                        src={getProfileAvatar(player.profiles.username, player.profiles.profile_picture_url)}
+                                        src={resolveProfileImage(player.profiles.profile_picture_url, player.profiles.username)}
                                         alt={player.profiles.username}
                                       />
                                       <AvatarFallback>

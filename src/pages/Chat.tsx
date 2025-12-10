@@ -267,7 +267,7 @@ if (profile) {
           <div className="flex gap-2 items-center flex-wrap">
             <div className="flex items-center gap-2">
               <Avatar className="w-8 h-8">
-                <AvatarImage src={resolveProfileImage(profile?.profile_picture_url)} alt={profile?.username} />
+                <AvatarImage src={resolveProfileImage(profile?.profile_picture_url, profile?.username)} alt={profile?.username} />
                 <AvatarFallback>{profile?.username?.[0]}</AvatarFallback>
               </Avatar>
               <span className="text-sm">Welcome, {profile?.username}</span>

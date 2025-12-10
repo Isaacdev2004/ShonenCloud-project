@@ -174,7 +174,7 @@ const BlogPost = ({ post, currentUserId, isAdmin, onUpdate }: BlogPostProps) => 
       <div className="flex items-start gap-4">
         {authorProfile?.profile_picture_url && (
           <img
-            src={resolveProfileImage(authorProfile?.profile_picture_url)}
+            src={resolveProfileImage(authorProfile?.profile_picture_url, authorProfile?.username)}
             alt={authorProfile?.username}
             className="w-12 h-12 rounded-full"
           />
@@ -228,7 +228,7 @@ const BlogPost = ({ post, currentUserId, isAdmin, onUpdate }: BlogPostProps) => 
             {comments.map((comment: any) => (
               <div key={comment.id} className="flex items-start gap-2 text-sm">
                 <img
-                  src={resolveProfileImage(comment.profiles?.profile_picture_url)}
+                  src={resolveProfileImage(comment.profiles?.profile_picture_url, comment.profiles?.username)}
                   alt={comment.profiles?.username}
                   className="w-8 h-8 rounded-full"
                 />

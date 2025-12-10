@@ -344,7 +344,7 @@ const Profile = () => {
                 <Label>Profile Picture</Label>
                 <div className="flex items-center gap-4 mb-4">
                   <Avatar className="w-20 h-20">
-                    <AvatarImage src={resolveProfileImage(formData.profilePicture)} alt="Current Profile" />
+                    <AvatarImage src={resolveProfileImage(formData.profilePicture, formData.username)} alt="Current Profile" />
                     <AvatarFallback>{formData.username[0]}</AvatarFallback>
                   </Avatar>
                 </div>
@@ -371,7 +371,7 @@ const Profile = () => {
                         }`}
                       >
                         <Avatar className="w-full h-full">
-                          <AvatarImage src={resolveProfileImage(pictureValue)} alt={pic.name} className="object-cover" />
+                          <AvatarImage src={resolveProfileImage(pictureValue, formData.username)} alt={pic.name} className="object-cover" />
                           <AvatarFallback>{pic.name[0]}</AvatarFallback>
                         </Avatar>
                       </button>
@@ -384,7 +384,7 @@ const Profile = () => {
             {!isOwnProfile && (
               <div className="flex items-center gap-4">
                 <Avatar className="w-20 h-20">
-                  <AvatarImage src={resolveProfileImage(profile?.profile_picture_url)} alt={profile?.username} />
+                  <AvatarImage src={resolveProfileImage(profile?.profile_picture_url, profile?.username)} alt={profile?.username} />
                   <AvatarFallback>{profile?.username?.[0]}</AvatarFallback>
                 </Avatar>
                 <div>

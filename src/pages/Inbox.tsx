@@ -257,7 +257,7 @@ export default function Inbox() {
                           className="h-20 w-20 cursor-pointer flex-shrink-0"
                           onClick={() => navigate(`/profile?user=${userId}`)}
                         >
-                          <AvatarImage src={resolveProfileImage(profile?.profile_picture_url)} />
+                          <AvatarImage src={resolveProfileImage(profile?.profile_picture_url, profile?.username)} />
                           <AvatarFallback className="text-xl">{profile?.username?.[0]}</AvatarFallback>
                         </Avatar>
                         <div className="flex-1 min-w-0">

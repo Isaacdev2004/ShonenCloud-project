@@ -223,7 +223,7 @@ const Dashboard = () => {
           <div className="flex gap-2 items-center flex-wrap">
             <div className="flex items-center gap-2">
               <Avatar className="w-8 h-8">
-                <AvatarImage src={resolveProfileImage(profile?.profile_picture_url)} alt={profile?.username} />
+                <AvatarImage src={resolveProfileImage(profile?.profile_picture_url, profile?.username)} alt={profile?.username} />
                 <AvatarFallback>{profile?.username?.[0]}</AvatarFallback>
               </Avatar>
               <span className="text-sm">Welcome, {profile?.username}</span>
@@ -315,7 +315,7 @@ const Dashboard = () => {
               <CardContent className="p-6">
                 <div className="flex items-center gap-4 mb-4">
                   <Avatar className="w-16 h-16">
-                    <AvatarImage src={resolveProfileImage(profile?.profile_picture_url)} alt={profile?.username} />
+                    <AvatarImage src={resolveProfileImage(profile?.profile_picture_url, profile?.username)} alt={profile?.username} />
                     <AvatarFallback className="text-2xl">{profile?.username?.[0]}</AvatarFallback>
                   </Avatar>
                   <div>

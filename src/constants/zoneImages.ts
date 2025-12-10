@@ -29,6 +29,24 @@ export const ZONE_IMAGE_LIST: string[] = [
   baschool,
 ];
 
+// Zone names that correspond to the images in ZONE_IMAGE_LIST (in the same order)
+export const ZONE_IMAGE_NAMES: string[] = [
+  "Planet Namek",
+  "Testing Gates",
+  "Shibuya Station",
+  "Scrap Island",
+  "Musutafu",
+  "Hueco Mundo",
+  "Chunin Exam",
+  "Baschool",
+];
+
+// Function to get zone name from image
+export const getZoneNameFromImage = (imageSrc: string): string | undefined => {
+  const index = ZONE_IMAGE_LIST.indexOf(imageSrc);
+  return index !== -1 ? ZONE_IMAGE_NAMES[index] : undefined;
+};
+
 const NORMALIZED_ZONE_IMAGES: Record<string, string> = Object.fromEntries(
   Object.entries(ZONE_IMAGES).map(([name, src]) => [
     name.trim().toLowerCase().replace(/\s+/g, " " ),

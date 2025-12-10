@@ -10,8 +10,15 @@ const MENTOR_MAP = MENTOR_IMAGES as Record<string, string>;
  * - "mentor:key" format (e.g., "mentor:nobara")
  * - Direct URL (http/https or /assets paths)
  * - undefined/null returns default avatar
+ * - If username is "Admin", returns admin profile picture
  */
-export const resolveProfileImage = (url?: string | null): string => {
+export const resolveProfileImage = (url?: string | null, username?: string | null): string => {
+  // Check for admin user first
+  if (username === "Admin") {
+    const adminPic = PROFILE_PICTURES.find(p => p.id === "admin");
+    if (adminPic) return adminPic.url;
+  }
+  
   if (!url) return DEFAULT_AVATAR;
   
   const normalized = url.trim();
