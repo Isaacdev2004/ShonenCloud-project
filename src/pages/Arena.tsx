@@ -368,6 +368,32 @@ const Arena = () => {
     });
   };
 
+  const handleRemoveFromArena = async (targetUserId: string, username: string) => {
+    if (!isAdmin) return;
+
+    const { error } = await supabase
+      .from("player_positions")
+      .delete()
+      .eq("user_id", targetUserId);
+
+    if (error) {
+      toast({
+        title: "Error",
+        description: "Failed to remove player from Arena",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    toast({
+      title: "Success",
+      description: `${username} has been removed from Arena zones`,
+    });
+
+    // Refresh player positions
+    fetchPlayerPositions();
+  };
+
   const getPlayersInZone = (zoneId: string) => {
     return playerPositions.filter((p) => p.zone_id === zoneId);
   };
@@ -681,6 +707,7 @@ const Arena = () => {
       { value: "Stunned", label: "Stunned", description: "Cannot do anything" },
       { value: "Hidden", label: "Hidden", description: "Only affected if revealed or by AOE" },
       { value: "Evasion mode", label: "Evasion mode", description: "8 turns cooldown, costs half Energy" },
+      { value: "Exploring", label: "Exploring", description: "Exploring the surrounding area within zone" },
     ];
   };
 
@@ -1047,6 +1074,19 @@ const Arena = () => {
                                     <p className="text-sm text-muted-foreground">
                                       Discipline: {player.profiles.discipline}
                                     </p>
+                                    {isAdmin && (
+                                      <Button
+                                        size="sm"
+                                        variant="destructive"
+                                        className="mt-2 w-full"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleRemoveFromArena(player.user_id, player.profiles.username);
+                                        }}
+                                      >
+                                        Remove from Arena
+                                      </Button>
+                                    )}
                                     {playerTitles[player.user_id] && (
                                       <div className="flex items-center gap-2 mt-1">
                                         <p className="text-xs text-muted-foreground">Codex:</p>

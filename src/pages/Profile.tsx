@@ -136,6 +136,11 @@ const Profile = () => {
   const getAvailableProfilePictures = async () => {
     if (!user) return [];
     
+    // Admin can access all profile pictures
+    if (profile?.username === "Admin") {
+      return PROFILE_PICTURES;
+    }
+    
     const availablePics: typeof PROFILE_PICTURES = [];
     
     // Get current mentor IDs for filtering purchased pictures
