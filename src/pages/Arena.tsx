@@ -225,23 +225,8 @@ const Arena = () => {
 
       if (posData) {
         setCurrentZone(posData.zone_id);
-      } else {
-        // Create initial position with first zone
-        const { data: zonesData } = await supabase
-          .from("arena_zones")
-          .select("id")
-          .order("name")
-          .limit(1)
-          .single();
-
-        if (zonesData) {
-          await supabase.from("player_positions").insert({
-            user_id: id,
-            zone_id: zonesData.id,
-          });
-          setCurrentZone(zonesData.id);
-        }
       }
+      // Removed auto-joining first zone - users must manually click a zone to join
     }
   };
 
@@ -370,6 +355,16 @@ const Arena = () => {
 
   const handleRemoveFromArena = async (targetUserId: string, username: string) => {
     if (!isAdmin) return;
+    
+    // Prevent admin from removing themselves
+    if (targetUserId === userId) {
+      toast({
+        title: "Error",
+        description: "You cannot remove yourself from Arena",
+        variant: "destructive",
+      });
+      return;
+    }
 
     const { error } = await supabase
       .from("player_positions")
@@ -1039,12 +1034,12 @@ const Arena = () => {
                       {playersInZone.length > 0 && (
                         <div className="flex flex-wrap gap-2 pl-4">
                            {playersInZone.map((player) => (
-                            <TooltipProvider key={player.user_id}>
+                            <TooltipProvider key={player.user_id} delayDuration={0}>
                               <Tooltip>
-                                <TooltipTrigger>
+                                <TooltipTrigger asChild>
                                   <div 
                                     onClick={() => handleTargetPlayer(player.user_id)}
-                                    className="relative"
+                                    className="relative touch-manipulation"
                                   >
                                     <Avatar className={`w-10 h-10 border-2 cursor-pointer hover:border-primary transition-colors ${
                                       currentTarget === player.user_id ? 'border-destructive ring-2 ring-destructive' : 'border-border'
@@ -1066,7 +1061,11 @@ const Arena = () => {
                                     )}
                                   </div>
                                 </TooltipTrigger>
-                                <TooltipContent className="bg-card border-border">
+                                <TooltipContent 
+                                  className="bg-card border-border touch-manipulation"
+                                  side="top"
+                                  sideOffset={5}
+                                >
                                   <div className="space-y-1">
                                     <p className="font-bold text-foreground">
                                       {player.profiles.username}
@@ -1074,7 +1073,7 @@ const Arena = () => {
                                     <p className="text-sm text-muted-foreground">
                                       Discipline: {player.profiles.discipline}
                                     </p>
-                                    {isAdmin && (
+                                    {isAdmin && player.user_id !== userId && (
                                       <Button
                                         size="sm"
                                         variant="destructive"
