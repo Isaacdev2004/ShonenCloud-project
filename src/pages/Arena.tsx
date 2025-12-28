@@ -189,6 +189,7 @@ const Arena = () => {
   const [showPlayerPopup, setShowPlayerPopup] = useState<string | null>(null);
   const [lastActionTime, setLastActionTime] = useState<Date | null>(null);
   const [lastTechniqueTime, setLastTechniqueTime] = useState<Date | null>(null);
+  const [showZoneSelectDialog, setShowZoneSelectDialog] = useState(false);
   
   // Stats state (using new system)
   const [currentHP, setCurrentHP] = useState(100);
@@ -2333,13 +2334,41 @@ const Arena = () => {
               {/* Current Target Display */}
               {(currentTarget || selectedZoneTarget) && (
                 <div className="mt-4 pt-4 border-t border-border">
-                  <p className="text-xs font-semibold text-muted-foreground mb-1">Current target:</p>
-                  <p className="text-sm font-bold text-primary">
-                    {selectedZoneTarget 
-                      ? ZONE_IMAGE_NAMES[zones.findIndex(z => z.id === selectedZoneTarget) % ZONE_IMAGE_NAMES.length]
-                      : playerPositions.find(p => p.user_id === currentTarget)?.profiles.username || "Unknown"
-                    }
-                  </p>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs font-semibold text-muted-foreground mb-1">Current target:</p>
+                      <p className="text-sm font-bold text-primary">
+                        {selectedZoneTarget 
+                          ? ZONE_IMAGE_NAMES[zones.findIndex(z => z.id === selectedZoneTarget) % ZONE_IMAGE_NAMES.length]
+                          : playerPositions.find(p => p.user_id === currentTarget)?.profiles.username || "Unknown"
+                        }
+                      </p>
+                    </div>
+                    {hasJoined && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={async () => {
+                          setCurrentTarget(null);
+                          setSelectedZoneTarget(null);
+                          await supabase
+                            .from("profiles")
+                            .update({ 
+                              current_target_id: null,
+                              current_target_zone_id: null,
+                              is_targeting_zone: false
+                            })
+                            .eq("id", userId);
+                          toast({
+                            title: "Target Cleared",
+                            description: "You are no longer targeting anyone",
+                          });
+                        }}
+                      >
+                        Untarget
+                      </Button>
+                    )}
+                  </div>
                 </div>
               )}
               
@@ -2358,15 +2387,34 @@ const Arena = () => {
               </Button>
               )}
               
-              {/* Battle Timer Display */}
-              {hasJoined && currentSession?.battle_timer_ends_at && battleTimer > 0 && (
-                <div className="mt-4 pt-4 border-t border-border">
-                  <p className="text-xs font-semibold text-muted-foreground mb-1">Battle Timer:</p>
-                  <p className={`text-lg font-bold ${timerSystem.isInSetupPhase(currentSession.battle_timer_ends_at) ? 'text-orange-500' : 'text-green-500'}`}>
-                    {timerSystem.formatTime(battleTimer)}
-                  </p>
-                  {timerSystem.isInSetupPhase(currentSession.battle_timer_ends_at) && (
-                    <p className="text-xs text-muted-foreground mt-1">Setup Phase (SETUP/COMBO only)</p>
+              {/* Arena Status & Timers */}
+              {hasJoined && currentSession && (
+                <div className="mt-4 pt-4 border-t border-border space-y-2">
+                  {/* Arena Open/Close Timer */}
+                  <div>
+                    <p className="text-xs font-semibold text-muted-foreground mb-1">Arena Status:</p>
+                    {timerSystem.isArenaOpen(currentSession.opened_at, currentSession.closed_at) ? (
+                      <p className="text-sm font-bold text-green-500">
+                        Open - Closes in {timerSystem.formatTime(timerSystem.getTimeUntilArenaCloses(currentSession.closed_at))}
+                      </p>
+                    ) : (
+                      <p className="text-sm font-bold text-orange-500">
+                        Closed - Opens in {timerSystem.formatTime(arenaOpenTimer)}
+                      </p>
+                    )}
+                  </div>
+                  
+                  {/* Battle Timer Display */}
+                  {currentSession.battle_timer_ends_at && (
+                    <div>
+                      <p className="text-xs font-semibold text-muted-foreground mb-1">Battle Timer:</p>
+                      <p className={`text-lg font-bold ${timerSystem.isInSetupPhase(currentSession.battle_timer_ends_at) ? 'text-orange-500' : 'text-green-500'}`}>
+                        {timerSystem.formatTime(battleTimer)}
+                      </p>
+                      {timerSystem.isInSetupPhase(currentSession.battle_timer_ends_at) && (
+                        <p className="text-xs text-muted-foreground mt-1">Setup Phase (SETUP/COMBO only)</p>
+                      )}
+                    </div>
                   )}
                 </div>
               )}
@@ -2417,6 +2465,23 @@ const Arena = () => {
                     {actionCooldowns["observe"] && !timerSystem.isCooldownExpired(actionCooldowns["observe"]) && (
                       <span className="ml-2 text-xs">
                         ({timerSystem.formatTime(timerSystem.getRemainingCooldown(actionCooldowns["observe"]))})
+                      </span>
+                    )}
+                  </Button>
+                  <Button 
+                    onClick={() => setShowZoneSelectDialog(true)}
+                    className="w-full"
+                    variant="outline"
+                    disabled={
+                      !timerSystem.isCooldownExpired(actionCooldowns["change_zone"]) ||
+                      (lastActionTime && new Date().getTime() - lastActionTime.getTime() < 60000) ||
+                      statusSystem.statusBlocksActions(playerStatuses.map(s => s.status))
+                    }
+                  >
+                    Change Zone
+                    {actionCooldowns["change_zone"] && !timerSystem.isCooldownExpired(actionCooldowns["change_zone"]) && (
+                      <span className="ml-2 text-xs">
+                        ({timerSystem.formatTime(timerSystem.getRemainingCooldown(actionCooldowns["change_zone"]))})
                       </span>
                     )}
                   </Button>
@@ -3225,6 +3290,42 @@ const Arena = () => {
             >
               Use Technique
             </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Zone Select Dialog for Change Zone Action */}
+      <Dialog open={showZoneSelectDialog} onOpenChange={setShowZoneSelectDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Select Zone</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2">
+            {zones.map((zone, index) => {
+              const zoneImage = ZONE_IMAGE_LIST[index % ZONE_IMAGE_LIST.length];
+              const zoneNameFromImage = ZONE_IMAGE_NAMES[index % ZONE_IMAGE_NAMES.length];
+              const isCurrentZone = currentZone === zone.id;
+              return (
+                <Button
+                  key={zone.id}
+                  variant={isCurrentZone ? "default" : "outline"}
+                  className="w-full justify-start"
+                  onClick={() => {
+                    handleChangeZoneNew(zone.id);
+                    setShowZoneSelectDialog(false);
+                  }}
+                  disabled={isCurrentZone}
+                >
+                  <img 
+                    src={zoneImage} 
+                    alt={zoneNameFromImage}
+                    className="w-12 h-8 rounded mr-2 object-cover"
+                  />
+                  <span>{zoneNameFromImage}</span>
+                  {isCurrentZone && <span className="ml-auto text-xs">(Current)</span>}
+                </Button>
+              );
+            })}
           </div>
         </DialogContent>
       </Dialog>

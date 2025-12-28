@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 import { z } from "zod";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -85,7 +86,29 @@ const AdminPanel = () => {
     price: 0,
     level_requirement: 1,
     mentor_id: "",
-    image_url: ""
+    image_url: "",
+    // New Arena System Fields
+    damage: 0,
+    armor_damage: 0,
+    armor_given: 0,
+    aura_damage: 0,
+    given_aura: 0,
+    heal: 0,
+    tags: [] as string[],
+    energy_cost: 0,
+    energy_given: 0,
+    cooldown: 1,
+    opponent_status: null as string | null,
+    self_status: null as string | null,
+    no_hit_m: null as number | null,
+    specific_status_hit: null as string | null,
+    mastery_given: 0,
+    mastery_taken: 0,
+    no_hit_e: null as number | null,
+    no_use_e: null as number | null,
+    no_use_m: null as number | null,
+    atk_boost: 0,
+    atk_debuff: 0,
   });
   const [newMentor, setNewMentor] = useState({
     name: "",
@@ -594,7 +617,29 @@ const AdminPanel = () => {
         price: newTechnique.price,
         level_requirement: newTechnique.level_requirement,
         mentor_id: newTechnique.mentor_id,
-        image_url: newTechnique.image_url
+        image_url: newTechnique.image_url,
+        // New Arena System Fields
+        damage: newTechnique.damage || 0,
+        armor_damage: newTechnique.armor_damage || 0,
+        armor_given: newTechnique.armor_given || 0,
+        aura_damage: newTechnique.aura_damage || 0,
+        given_aura: newTechnique.given_aura || 0,
+        heal: newTechnique.heal || 0,
+        tags: newTechnique.tags || [],
+        energy_cost: newTechnique.energy_cost || 0,
+        energy_given: newTechnique.energy_given || 0,
+        cooldown: newTechnique.cooldown || 1,
+        opponent_status: newTechnique.opponent_status || null,
+        self_status: newTechnique.self_status || null,
+        no_hit_m: newTechnique.no_hit_m || null,
+        specific_status_hit: newTechnique.specific_status_hit || null,
+        mastery_given: newTechnique.mastery_given || 0,
+        mastery_taken: newTechnique.mastery_taken || 0,
+        no_hit_e: newTechnique.no_hit_e || null,
+        no_use_e: newTechnique.no_use_e || null,
+        no_use_m: newTechnique.no_use_m || null,
+        atk_boost: newTechnique.atk_boost || 0,
+        atk_debuff: newTechnique.atk_debuff || 0,
       });
 
       if (error) throw error;
@@ -608,7 +653,28 @@ const AdminPanel = () => {
         price: 0,
         level_requirement: 1,
         mentor_id: "",
-        image_url: ""
+        image_url: "",
+        damage: 0,
+        armor_damage: 0,
+        armor_given: 0,
+        aura_damage: 0,
+        given_aura: 0,
+        heal: 0,
+        tags: [],
+        energy_cost: 0,
+        energy_given: 0,
+        cooldown: 1,
+        opponent_status: null,
+        self_status: null,
+        no_hit_m: null,
+        specific_status_hit: null,
+        mastery_given: 0,
+        mastery_taken: 0,
+        no_hit_e: null,
+        no_use_e: null,
+        no_use_m: null,
+        atk_boost: 0,
+        atk_debuff: 0,
       });
       fetchTechniques();
     } catch (error: any) {
@@ -630,7 +696,29 @@ const AdminPanel = () => {
           price: editingTechnique.price,
           level_requirement: editingTechnique.level_requirement,
           mentor_id: editingTechnique.mentor_id,
-          image_url: editingTechnique.image_url
+          image_url: editingTechnique.image_url,
+          // New Arena System Fields
+          damage: editingTechnique.damage || 0,
+          armor_damage: editingTechnique.armor_damage || 0,
+          armor_given: editingTechnique.armor_given || 0,
+          aura_damage: editingTechnique.aura_damage || 0,
+          given_aura: editingTechnique.given_aura || 0,
+          heal: editingTechnique.heal || 0,
+          tags: editingTechnique.tags || [],
+          energy_cost: editingTechnique.energy_cost || 0,
+          energy_given: editingTechnique.energy_given || 0,
+          cooldown: editingTechnique.cooldown || 1,
+          opponent_status: editingTechnique.opponent_status || null,
+          self_status: editingTechnique.self_status || null,
+          no_hit_m: editingTechnique.no_hit_m || null,
+          specific_status_hit: editingTechnique.specific_status_hit || null,
+          mastery_given: editingTechnique.mastery_given || 0,
+          mastery_taken: editingTechnique.mastery_taken || 0,
+          no_hit_e: editingTechnique.no_hit_e || null,
+          no_use_e: editingTechnique.no_use_e || null,
+          no_use_m: editingTechnique.no_use_m || null,
+          atk_boost: editingTechnique.atk_boost || 0,
+          atk_debuff: editingTechnique.atk_debuff || 0,
         })
         .eq("id", editingTechnique.id);
 
@@ -1830,6 +1918,273 @@ const AdminPanel = () => {
                       <img src={newTechnique.image_url} alt="Preview" className="h-10 w-10 rounded object-cover" />
                     )}
                   </div>
+                </div>
+                
+                {/* New Arena System Fields */}
+                <div className="col-span-2 border-t pt-4 mt-4">
+                  <h4 className="font-semibold mb-3">Arena System Fields</h4>
+                </div>
+                
+                {/* Damage Fields */}
+                <div>
+                  <Label>Damage</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    value={newTechnique.damage}
+                    onChange={(e) => setNewTechnique({...newTechnique, damage: parseInt(e.target.value) || 0})}
+                    placeholder="0"
+                  />
+                </div>
+                <div>
+                  <Label>Armor Damage</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    value={newTechnique.armor_damage}
+                    onChange={(e) => setNewTechnique({...newTechnique, armor_damage: parseInt(e.target.value) || 0})}
+                    placeholder="0"
+                  />
+                </div>
+                <div>
+                  <Label>Armor Given</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    value={newTechnique.armor_given}
+                    onChange={(e) => setNewTechnique({...newTechnique, armor_given: parseInt(e.target.value) || 0})}
+                    placeholder="0"
+                  />
+                </div>
+                <div>
+                  <Label>Aura Damage</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    value={newTechnique.aura_damage}
+                    onChange={(e) => setNewTechnique({...newTechnique, aura_damage: parseInt(e.target.value) || 0})}
+                    placeholder="0"
+                  />
+                </div>
+                <div>
+                  <Label>Given Aura</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    value={newTechnique.given_aura}
+                    onChange={(e) => setNewTechnique({...newTechnique, given_aura: parseInt(e.target.value) || 0})}
+                    placeholder="0"
+                  />
+                </div>
+                <div>
+                  <Label>Heal</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    value={newTechnique.heal}
+                    onChange={(e) => setNewTechnique({...newTechnique, heal: parseInt(e.target.value) || 0})}
+                    placeholder="0"
+                  />
+                </div>
+                
+                {/* Tags */}
+                <div className="col-span-2">
+                  <Label>Tags (Multi-select)</Label>
+                  <div className="grid grid-cols-3 gap-2 mt-2">
+                    {["Dice", "Setup", "Physical", "Ranged", "Mental", "Aoe", "Elemental", "Buff", "Debuff", "Movement", "Defensive", "Offensive", "Melee", "Global", "Combo", "Power", "Revival"].map((tag) => (
+                      <div key={tag} className="flex items-center space-x-2">
+                        <Checkbox
+                          id={`tag-${tag}`}
+                          checked={newTechnique.tags.includes(tag)}
+                          onCheckedChange={(checked) => {
+                            if (checked) {
+                              setNewTechnique({...newTechnique, tags: [...newTechnique.tags, tag]});
+                            } else {
+                              setNewTechnique({...newTechnique, tags: newTechnique.tags.filter(t => t !== tag)});
+                            }
+                          }}
+                        />
+                        <Label htmlFor={`tag-${tag}`} className="text-sm font-normal cursor-pointer">{tag}</Label>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                
+                {/* Energy Fields */}
+                <div>
+                  <Label>Energy Cost (1-20)</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    max="20"
+                    value={newTechnique.energy_cost}
+                    onChange={(e) => setNewTechnique({...newTechnique, energy_cost: parseInt(e.target.value) || 0})}
+                    placeholder="0"
+                  />
+                </div>
+                <div>
+                  <Label>Energy Given (1-20)</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    max="20"
+                    value={newTechnique.energy_given}
+                    onChange={(e) => setNewTechnique({...newTechnique, energy_given: parseInt(e.target.value) || 0})}
+                    placeholder="0"
+                  />
+                </div>
+                
+                {/* Cooldown */}
+                <div>
+                  <Label>Cooldown (1-7 minutes)</Label>
+                  <Select value={newTechnique.cooldown.toString()} onValueChange={(val) => setNewTechnique({...newTechnique, cooldown: parseInt(val)})}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {[1, 2, 3, 4, 5, 6, 7].map((num) => (
+                        <SelectItem key={num} value={num.toString()}>{num} minute{num > 1 ? 's' : ''}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                
+                {/* Status Fields */}
+                <div>
+                  <Label>Opponent Status</Label>
+                  <Select value={newTechnique.opponent_status || ""} onValueChange={(val) => setNewTechnique({...newTechnique, opponent_status: val || null})}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="None" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="">None</SelectItem>
+                      {["Stunned", "Hidden", "Shielded", "Weakened", "Lethal", "Grounded", "Reaping", "Unwell", "Focused", "Airborne", "Underground", "Silenced", "Stasis", "K.O", "Element-affected", "Launched Up", "Shrouded", "Analyzed", "Blessed", "Bleeding", "Chaos-affected", "Exploring"].map((status) => (
+                        <SelectItem key={status} value={status}>{status}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label>Self Status</Label>
+                  <Select value={newTechnique.self_status || ""} onValueChange={(val) => setNewTechnique({...newTechnique, self_status: val || null})}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="None" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="">None</SelectItem>
+                      {["Stunned", "Hidden", "Shielded", "Weakened", "Lethal", "Grounded", "Reaping", "Unwell", "Focused", "Airborne", "Underground", "Silenced", "Stasis", "K.O", "Element-affected", "Launched Up", "Shrouded", "Analyzed", "Blessed", "Bleeding", "Chaos-affected", "Exploring"].map((status) => (
+                        <SelectItem key={status} value={status}>{status}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                
+                {/* Mastery Fields */}
+                <div>
+                  <Label>Mastery Given</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.25"
+                    value={newTechnique.mastery_given}
+                    onChange={(e) => setNewTechnique({...newTechnique, mastery_given: parseFloat(e.target.value) || 0})}
+                    placeholder="0"
+                  />
+                </div>
+                <div>
+                  <Label>Mastery Taken</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.25"
+                    value={newTechnique.mastery_taken}
+                    onChange={(e) => setNewTechnique({...newTechnique, mastery_taken: parseFloat(e.target.value) || 0})}
+                    placeholder="0"
+                  />
+                </div>
+                
+                {/* No Hit Fields */}
+                <div>
+                  <Label>No Hit Mastery (1-6)</Label>
+                  <Select value={newTechnique.no_hit_m?.toString() || ""} onValueChange={(val) => setNewTechnique({...newTechnique, no_hit_m: val ? parseInt(val) : null})}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="None" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="">None</SelectItem>
+                      {[1, 2, 3, 4, 5, 6].map((num) => (
+                        <SelectItem key={num} value={num.toString()}>{num}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label>No Hit Energy</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    value={newTechnique.no_hit_e || ""}
+                    onChange={(e) => setNewTechnique({...newTechnique, no_hit_e: e.target.value ? parseInt(e.target.value) : null})}
+                    placeholder="None"
+                  />
+                </div>
+                
+                {/* Specific Status Hit */}
+                <div>
+                  <Label>Specific Status Hit</Label>
+                  <Select value={newTechnique.specific_status_hit || ""} onValueChange={(val) => setNewTechnique({...newTechnique, specific_status_hit: val || null})}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="None" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="">None</SelectItem>
+                      {["Stunned", "Hidden", "Shielded", "Weakened", "Lethal", "Grounded", "Reaping", "Unwell", "Focused", "Airborne", "Underground", "Silenced", "Stasis", "K.O", "Element-affected", "Launched Up", "Shrouded", "Analyzed", "Blessed", "Bleeding", "Chaos-affected", "Exploring"].map((status) => (
+                        <SelectItem key={status} value={status}>{status}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                
+                {/* No Use Fields */}
+                <div>
+                  <Label>No Use Energy</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    value={newTechnique.no_use_e || ""}
+                    onChange={(e) => setNewTechnique({...newTechnique, no_use_e: e.target.value ? parseInt(e.target.value) : null})}
+                    placeholder="None"
+                  />
+                </div>
+                <div>
+                  <Label>No Use Mastery</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    value={newTechnique.no_use_m || ""}
+                    onChange={(e) => setNewTechnique({...newTechnique, no_use_m: e.target.value ? parseInt(e.target.value) : null})}
+                    placeholder="None"
+                  />
+                </div>
+                
+                {/* ATK Fields */}
+                <div>
+                  <Label>ATK Boost</Label>
+                  <Input
+                    type="number"
+                    value={newTechnique.atk_boost}
+                    onChange={(e) => setNewTechnique({...newTechnique, atk_boost: parseInt(e.target.value) || 0})}
+                    placeholder="0"
+                  />
+                </div>
+                <div>
+                  <Label>ATK Debuff</Label>
+                  <Input
+                    type="number"
+                    value={newTechnique.atk_debuff}
+                    onChange={(e) => setNewTechnique({...newTechnique, atk_debuff: parseInt(e.target.value) || 0})}
+                    placeholder="0"
+                  />
                 </div>
               </div>
               <Button onClick={handleAddTechnique} disabled={uploadingImage}>
