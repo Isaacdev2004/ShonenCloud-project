@@ -1872,7 +1872,6 @@ const Arena = () => {
     }
     
     // Check combo requirement (1.5+ Mastery)
-    const tags = techniqueData.tags || [];
     if (tags.includes("Combo") && mastery < 1.5) {
       toast({
         title: "Insufficient Mastery",
