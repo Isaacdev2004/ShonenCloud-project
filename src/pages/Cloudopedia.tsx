@@ -28,7 +28,7 @@ const Cloudopedia = () => {
               </p>
               <p className="mt-2">
                 Put your cursor on any profile pictures in any zones to see your opponent&apos;s current stats.
-              </p>
+            </p>
             </div>
 
             <div>
@@ -59,7 +59,7 @@ const Cloudopedia = () => {
             <div>
               <p>
                 UPDATE your stats accordingly. Don't be unfair to your opponents. Respect the system in place.
-              </p>
+            </p>
             </div>
 
             <div>
@@ -72,7 +72,7 @@ const Cloudopedia = () => {
               </p>
               <p>
                 <strong>Gather Energy:</strong> Cost 0 Energy, gives full Energy, no cooldown, cannot use OFFENSIVE and DEFENSIVE techniques with it.
-              </p>
+            </p>
             </div>
 
             <div>
@@ -105,7 +105,7 @@ const Cloudopedia = () => {
               </p>
               <p>
                 <strong>Clash ?</strong> Compare Energy after both techniques are used. Higher energy wins. If equal, compare Priority. Can only Clash if same distance, melee clashes with melee, never ranged. Vice Versa.
-              </p>
+            </p>
               <p>
                 <strong>Setup ?</strong> Can only be defended against by a Movement with equal or superior priority. Of if the user gets stunned or silenced while it's still in play.
               </p>
@@ -143,7 +143,7 @@ const Cloudopedia = () => {
               <h2 className="text-base font-bold text-foreground mb-2">IMPORTANT !!!</h2>
               <p>
                 An OFFENSIVE technique with double the priority of a DEFENSIVE technique will always win. Same for the other way around, a DEFENSIVE technique with double priority will always block the OFFENSIVE. Double Priority ALWAYS wins ! No matter the tags/type. Only SETUP techniques don’t follow that rule.
-              </p>
+            </p>
               <p className="mt-2">
                 A DEFENSIVE technique typically describes the exact type of technique it blocks. If a DEFENSIVE technique has less Priority than an OFFENSIVE one, it still blocks it. But if the attacking player has more Energy after using their attack or if the defender is debuffed, the DEFENSIVE technique loses.
               </p>
