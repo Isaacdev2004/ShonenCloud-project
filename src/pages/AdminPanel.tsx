@@ -2052,12 +2052,12 @@ const AdminPanel = () => {
                 {/* Status Fields */}
                 <div>
                   <Label>Opponent Status</Label>
-                  <Select value={newTechnique.opponent_status || ""} onValueChange={(val) => setNewTechnique({...newTechnique, opponent_status: val || null})}>
+                  <Select value={newTechnique.opponent_status || "none"} onValueChange={(val) => setNewTechnique({...newTechnique, opponent_status: val === "none" ? null : val})}>
                     <SelectTrigger>
                       <SelectValue placeholder="None" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="">None</SelectItem>
+                      <SelectItem value="none">None</SelectItem>
                       {["Stunned", "Hidden", "Shielded", "Weakened", "Lethal", "Grounded", "Reaping", "Unwell", "Focused", "Airborne", "Underground", "Silenced", "Stasis", "K.O", "Element-affected", "Launched Up", "Shrouded", "Analyzed", "Blessed", "Bleeding", "Chaos-affected", "Exploring"].map((status) => (
                         <SelectItem key={status} value={status}>{status}</SelectItem>
                       ))}
@@ -2066,12 +2066,12 @@ const AdminPanel = () => {
                 </div>
                 <div>
                   <Label>Self Status</Label>
-                  <Select value={newTechnique.self_status || ""} onValueChange={(val) => setNewTechnique({...newTechnique, self_status: val || null})}>
+                  <Select value={newTechnique.self_status || "none"} onValueChange={(val) => setNewTechnique({...newTechnique, self_status: val === "none" ? null : val})}>
                     <SelectTrigger>
                       <SelectValue placeholder="None" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="">None</SelectItem>
+                      <SelectItem value="none">None</SelectItem>
                       {["Stunned", "Hidden", "Shielded", "Weakened", "Lethal", "Grounded", "Reaping", "Unwell", "Focused", "Airborne", "Underground", "Silenced", "Stasis", "K.O", "Element-affected", "Launched Up", "Shrouded", "Analyzed", "Blessed", "Bleeding", "Chaos-affected", "Exploring"].map((status) => (
                         <SelectItem key={status} value={status}>{status}</SelectItem>
                       ))}
@@ -2106,12 +2106,12 @@ const AdminPanel = () => {
                 {/* No Hit Fields */}
                 <div>
                   <Label>No Hit Mastery (1-6)</Label>
-                  <Select value={newTechnique.no_hit_m?.toString() || ""} onValueChange={(val) => setNewTechnique({...newTechnique, no_hit_m: val ? parseInt(val) : null})}>
+                  <Select value={newTechnique.no_hit_m?.toString() || "none"} onValueChange={(val) => setNewTechnique({...newTechnique, no_hit_m: val === "none" ? null : parseInt(val)})}>
                     <SelectTrigger>
                       <SelectValue placeholder="None" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="">None</SelectItem>
+                      <SelectItem value="none">None</SelectItem>
                       {[1, 2, 3, 4, 5, 6].map((num) => (
                         <SelectItem key={num} value={num.toString()}>{num}</SelectItem>
                       ))}
@@ -2132,12 +2132,12 @@ const AdminPanel = () => {
                 {/* Specific Status Hit */}
                 <div>
                   <Label>Specific Status Hit</Label>
-                  <Select value={newTechnique.specific_status_hit || ""} onValueChange={(val) => setNewTechnique({...newTechnique, specific_status_hit: val || null})}>
+                  <Select value={newTechnique.specific_status_hit || "none"} onValueChange={(val) => setNewTechnique({...newTechnique, specific_status_hit: val === "none" ? null : val})}>
                     <SelectTrigger>
                       <SelectValue placeholder="None" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="">None</SelectItem>
+                      <SelectItem value="none">None</SelectItem>
                       {["Stunned", "Hidden", "Shielded", "Weakened", "Lethal", "Grounded", "Reaping", "Unwell", "Focused", "Airborne", "Underground", "Silenced", "Stasis", "K.O", "Element-affected", "Launched Up", "Shrouded", "Analyzed", "Blessed", "Bleeding", "Chaos-affected", "Exploring"].map((status) => (
                         <SelectItem key={status} value={status}>{status}</SelectItem>
                       ))}
