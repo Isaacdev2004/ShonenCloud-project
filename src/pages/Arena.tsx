@@ -242,6 +242,11 @@ const Arena = () => {
       fetchUserActiveTitles(user.id);
       fetchNotifications(user.id);
       fetchCurrentTarget(user.id);
+      // New Arena System initializations
+      fetchCurrentSession();
+      fetchBattleFeed();
+      fetchPlayerStatuses(user.id);
+      fetchCooldowns(user.id);
     };
     fetchUser();
   }, [navigate]);
@@ -1224,13 +1229,7 @@ const Arena = () => {
   const fetchBattleFeed = async () => {
     const { data, error } = await supabase
       .from("battle_feed")
-      .select(`
-        *,
-        profiles:user_id (
-          username,
-          profile_picture_url
-        )
-      `)
+      .select("*")
       .order("created_at", { ascending: false })
       .limit(50);
     
@@ -1240,7 +1239,25 @@ const Arena = () => {
     }
     
     if (data) {
-      setBattleFeed(data as any);
+      // Fetch profiles separately since user_id references auth.users, not profiles
+      const userIds = Array.from(new Set(data.map((entry: any) => entry.user_id)));
+      const { data: profilesData } = await supabase
+        .from("profiles")
+        .select("id, username, profile_picture_url")
+        .in("id", userIds);
+      
+      // Map profiles to entries
+      const profileMap = (profilesData || []).reduce((acc: any, profile: any) => {
+        acc[profile.id] = profile;
+        return acc;
+      }, {});
+      
+      const entriesWithProfiles = data.map((entry: any) => ({
+        ...entry,
+        profiles: profileMap[entry.user_id] || { username: "Unknown", profile_picture_url: "" }
+      }));
+      
+      setBattleFeed(entriesWithProfiles as any);
     }
   };
   
@@ -2521,7 +2538,7 @@ const Arena = () => {
                           className={`relative cursor-pointer transition-all duration-300 hover:scale-105 flex-1 ${
                           isCurrentZone ? 'ring-4 ring-primary animate-pulse' : ''
                         }`}
-                          onClick={() => handleZoneChangeNew(zone.id)}
+                          onClick={() => handleChangeZoneNew(zone.id)}
                           title={zoneNameFromImage}
                       >
                         <img 
