@@ -30,7 +30,13 @@ const Login = () => {
       toast.success("Welcome back!");
       navigate("/dashboard");
     } catch (error: any) {
-      toast.error(error.message || "Failed to login");
+      // Check for network/DNS errors
+      if (error.message?.includes('Failed to fetch') || error.message?.includes('ERR_NAME_NOT_RESOLVED') || error.message?.includes('NetworkError')) {
+        toast.error("Cannot connect to Supabase. Please check your internet connection and verify your Supabase project is active.");
+        console.error('Supabase connection error:', error);
+      } else {
+        toast.error(error.message || "Failed to login");
+      }
     } finally {
       setLoading(false);
     }
