@@ -2383,7 +2383,7 @@ const Arena = () => {
                         }}
                       >
                         Untarget
-                      </Button>
+              </Button>
                     )}
                   </div>
                 </div>
@@ -2391,9 +2391,9 @@ const Arena = () => {
               
               {/* Join Button / Arena Status */}
               {!hasJoined && currentSession && (
-                <Button 
+              <Button 
                   onClick={handleJoinArena}
-                  className="w-full mt-4"
+                className="w-full mt-4"
                   variant={timerSystem.isArenaOpen(currentSession.opened_at, currentSession.closed_at) ? "default" : "outline"}
                   disabled={!timerSystem.isArenaOpen(currentSession.opened_at, currentSession.closed_at)}
                 >
