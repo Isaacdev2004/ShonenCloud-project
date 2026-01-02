@@ -1231,8 +1231,21 @@ const Arena = () => {
           setBattleTimer(battleTime);
         }
       } else {
-        const timeUntilOpen = timerSystem.getTimeUntilArenaOpens(currentSession.opened_at);
-        setArenaOpenTimer(timeUntilOpen);
+        // When closed, calculate next open time based on closed_at
+        if (currentSession.closed_at) {
+          const nextOpenTime = timerSystem.calculateNextArenaOpenTime(new Date(currentSession.closed_at));
+          const timeUntilOpen = timerSystem.getTimeUntilArenaOpens(nextOpenTime.toISOString());
+          setArenaOpenTimer(timeUntilOpen);
+        } else {
+          // Fallback: if no closed_at, use opened_at + close duration + open duration
+          if (currentSession.opened_at) {
+            const lastOpen = new Date(currentSession.opened_at);
+            const nextOpen = new Date(lastOpen);
+            nextOpen.setMinutes(nextOpen.getMinutes() + timerSystem.ARENA_OPEN_DURATION_MINUTES + timerSystem.ARENA_CLOSE_DURATION_MINUTES);
+            const timeUntilOpen = timerSystem.getTimeUntilArenaOpens(nextOpen.toISOString());
+            setArenaOpenTimer(timeUntilOpen);
+          }
+        }
       }
     };
     
@@ -2597,74 +2610,75 @@ const Arena = () => {
               </Button>
               )}
               
-              {/* Action Buttons */}
-              {hasJoined && (
-                <div className="mt-4 space-y-2">
-                  <Button 
-                    onClick={handleAttack}
-                    className="w-full"
-                    variant="destructive"
-                    disabled={
-                      !timerSystem.isCooldownExpired(actionCooldowns["attack"]) ||
-                      (lastActionTime && new Date().getTime() - lastActionTime.getTime() < 60000) ||
-                      statusSystem.statusBlocksActions(playerStatuses.map(s => s.status))
-                    }
-                  >
-                    Attack
-                    {actionCooldowns["attack"] && !timerSystem.isCooldownExpired(actionCooldowns["attack"]) && (
-                      <span className="ml-2 text-xs">
-                        ({timerSystem.formatTime(timerSystem.getRemainingCooldown(actionCooldowns["attack"]))})
-                      </span>
-                    )}
-                  </Button>
-                  <Button 
-                    onClick={handleMoveAround}
-                    className="w-full"
-                    variant="outline"
-                    disabled={
-                      (lastActionTime && new Date().getTime() - lastActionTime.getTime() < 60000) ||
-                      statusSystem.statusBlocksActions(playerStatuses.map(s => s.status))
-                    }
-                  >
-                    Move Around
-                  </Button>
-                  <Button 
-                    onClick={handleObserve}
-                    className="w-full"
-                    variant="outline"
-                    disabled={
-                      mastery < 1 ||
-                      !timerSystem.isCooldownExpired(actionCooldowns["observe"]) ||
-                      (lastActionTime && new Date().getTime() - lastActionTime.getTime() < 60000) ||
-                      statusSystem.statusBlocksActions(playerStatuses.map(s => s.status))
-                    }
-                  >
-                    Observe
-                    {actionCooldowns["observe"] && !timerSystem.isCooldownExpired(actionCooldowns["observe"]) && (
-                      <span className="ml-2 text-xs">
-                        ({timerSystem.formatTime(timerSystem.getRemainingCooldown(actionCooldowns["observe"]))})
-                      </span>
-                    )}
-                  </Button>
-                  <Button 
-                    onClick={() => setShowZoneSelectDialog(true)}
-                    className="w-full"
-                    variant="outline"
-                    disabled={
-                      !timerSystem.isCooldownExpired(actionCooldowns["change_zone"]) ||
-                      (lastActionTime && new Date().getTime() - lastActionTime.getTime() < 60000) ||
-                      statusSystem.statusBlocksActions(playerStatuses.map(s => s.status))
-                    }
-                  >
-                    Change Zone
-                    {actionCooldowns["change_zone"] && !timerSystem.isCooldownExpired(actionCooldowns["change_zone"]) && (
-                      <span className="ml-2 text-xs">
-                        ({timerSystem.formatTime(timerSystem.getRemainingCooldown(actionCooldowns["change_zone"]))})
-                      </span>
-                    )}
-                  </Button>
-                </div>
-              )}
+              {/* Action Buttons - Always visible, disabled when not joined */}
+              <div className="mt-4 space-y-2">
+                <Button 
+                  onClick={handleAttack}
+                  className="w-full"
+                  variant="destructive"
+                  disabled={
+                    !hasJoined ||
+                    !timerSystem.isCooldownExpired(actionCooldowns["attack"]) ||
+                    (lastActionTime && new Date().getTime() - lastActionTime.getTime() < 60000) ||
+                    statusSystem.statusBlocksActions(playerStatuses.map(s => s.status))
+                  }
+                >
+                  Attack
+                  {actionCooldowns["attack"] && !timerSystem.isCooldownExpired(actionCooldowns["attack"]) && (
+                    <span className="ml-2 text-xs">
+                      ({timerSystem.formatTime(timerSystem.getRemainingCooldown(actionCooldowns["attack"]))})
+                    </span>
+                  )}
+                </Button>
+                <Button 
+                  onClick={handleMoveAround}
+                  className="w-full"
+                  variant="outline"
+                  disabled={
+                    !hasJoined ||
+                    (lastActionTime && new Date().getTime() - lastActionTime.getTime() < 60000) ||
+                    statusSystem.statusBlocksActions(playerStatuses.map(s => s.status))
+                  }
+                >
+                  Move Around
+                </Button>
+                <Button 
+                  onClick={handleObserve}
+                  className="w-full"
+                  variant="outline"
+                  disabled={
+                    !hasJoined ||
+                    mastery < 1 ||
+                    !timerSystem.isCooldownExpired(actionCooldowns["observe"]) ||
+                    (lastActionTime && new Date().getTime() - lastActionTime.getTime() < 60000) ||
+                    statusSystem.statusBlocksActions(playerStatuses.map(s => s.status))
+                  }
+                >
+                  Observe
+                  {actionCooldowns["observe"] && !timerSystem.isCooldownExpired(actionCooldowns["observe"]) && (
+                    <span className="ml-2 text-xs">
+                      ({timerSystem.formatTime(timerSystem.getRemainingCooldown(actionCooldowns["observe"]))})
+                    </span>
+                  )}
+                </Button>
+                <Button 
+                  onClick={() => setShowZoneSelectDialog(true)}
+                  className="w-full"
+                  variant="outline"
+                  disabled={
+                    !timerSystem.isCooldownExpired(actionCooldowns["change_zone"]) ||
+                    (lastActionTime && new Date().getTime() - lastActionTime.getTime() < 60000) ||
+                    statusSystem.statusBlocksActions(playerStatuses.map(s => s.status))
+                  }
+                >
+                  Change Zone
+                  {actionCooldowns["change_zone"] && !timerSystem.isCooldownExpired(actionCooldowns["change_zone"]) && (
+                    <span className="ml-2 text-xs">
+                      ({timerSystem.formatTime(timerSystem.getRemainingCooldown(actionCooldowns["change_zone"]))})
+                    </span>
+                  )}
+                </Button>
+              </div>
               
               {/* Legacy Take Action Button (for techniques) */}
               {hasJoined && (
@@ -2822,8 +2836,8 @@ const Arena = () => {
                                         </div>
                                       </div>
                                       
-                                      {/* Action Buttons */}
-                                      {hasJoined && player.user_id !== userId && (
+                                      {/* Action Buttons - Always visible for other players */}
+                                      {player.user_id !== userId && (
                                         <div className="space-y-2 pt-4 border-t">
                                           <Button
                                             size="sm"
