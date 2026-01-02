@@ -1090,6 +1090,47 @@ const Arena = () => {
           battle_timer_ends_at: null,
           is_open: false,
         });
+      } else {
+        // No sessions exist - create the first one
+        const now = new Date();
+        const openedAt = new Date(now);
+        openedAt.setMinutes(0, 0, 0); // Start of current hour
+        const closedAt = timerSystem.calculateArenaCloseTime(openedAt);
+        
+        // Check if we should create a new session
+        const { data: allSessions } = await supabase
+          .from("arena_sessions")
+          .select("id")
+          .limit(1);
+        
+        if (!allSessions || allSessions.length === 0) {
+          // Create initial session
+          const { data: newSession, error: createError } = await supabase
+            .from("arena_sessions")
+            .insert({
+              session_number: 1,
+              opened_at: openedAt.toISOString(),
+              closed_at: closedAt.toISOString(),
+              is_open: timerSystem.isArenaOpen(openedAt.toISOString(), closedAt.toISOString()),
+            })
+            .select()
+            .single();
+          
+          if (!createError && newSession) {
+            setCurrentSession(newSession);
+          } else {
+            // Fallback: show a session that opens now
+            setCurrentSession({
+              id: "",
+              session_number: 0,
+              opened_at: openedAt.toISOString(),
+              closed_at: closedAt.toISOString(),
+              battle_started_at: null,
+              battle_timer_ends_at: null,
+              is_open: timerSystem.isArenaOpen(openedAt.toISOString(), closedAt.toISOString()),
+            });
+          }
+        }
       }
     }
   };
@@ -1106,17 +1147,64 @@ const Arena = () => {
       return;
     }
 
+    // If session has no ID, create a new session first
+    let sessionId = currentSession.id;
+    if (!sessionId || sessionId === "") {
+      const { data: lastSession } = await supabase
+        .from("arena_sessions")
+        .select("session_number")
+        .order("session_number", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      
+      const nextSessionNumber = (lastSession?.session_number || 0) + 1;
+      const openedAt = new Date(currentSession.opened_at);
+      const closedAt = new Date(currentSession.closed_at);
+      
+      const { data: newSession, error: createError } = await supabase
+        .from("arena_sessions")
+        .insert({
+          session_number: nextSessionNumber,
+          opened_at: openedAt.toISOString(),
+          closed_at: closedAt.toISOString(),
+          is_open: true,
+        })
+        .select()
+        .single();
+      
+      if (createError || !newSession) {
+        toast({
+          title: "Error",
+          description: "Failed to create Arena session",
+          variant: "destructive",
+        });
+        return;
+      }
+      
+      sessionId = newSession.id;
+      setCurrentSession(newSession);
+    }
+
     const { error } = await supabase
       .from("arena_participants")
       .insert({
         user_id: userId,
-        session_id: currentSession.id,
+        session_id: sessionId,
       });
     
     if (error) {
+      // Check if already joined
+      if (error.code === '23505') { // Unique constraint violation
+        setHasJoined(true);
+        toast({
+          title: "Already Joined",
+          description: "You are already in the Arena!",
+        });
+        return;
+      }
       toast({
         title: "Error",
-        description: "Failed to join Arena",
+        description: "Failed to join Arena: " + error.message,
         variant: "destructive",
       });
       return;
@@ -1694,13 +1782,22 @@ const Arena = () => {
   };
   
   const handleChangeZoneNew = async (zoneId: string) => {
-    if (!userId || !hasJoined) {
+    if (!userId) {
       toast({
         title: "Error",
-        description: "You must join the Arena first",
+        description: "You must be logged in to change zones",
         variant: "destructive",
       });
       return;
+    }
+    
+    // Allow zone changes even if not joined, but show a warning
+    if (!hasJoined) {
+      toast({
+        title: "Not Joined",
+        description: "You haven't joined the Arena yet. You can still change zones, but you won't be able to use actions until you join.",
+        variant: "default",
+      });
     }
     
     // Check cooldown
@@ -2389,23 +2486,8 @@ const Arena = () => {
                 </div>
               )}
               
-              {/* Join Button / Arena Status */}
-              {!hasJoined && currentSession && (
-              <Button 
-                  onClick={handleJoinArena}
-                className="w-full mt-4"
-                  variant={timerSystem.isArenaOpen(currentSession.opened_at, currentSession.closed_at) ? "default" : "outline"}
-                  disabled={!timerSystem.isArenaOpen(currentSession.opened_at, currentSession.closed_at)}
-                >
-                  {timerSystem.isArenaOpen(currentSession.opened_at, currentSession.closed_at) 
-                    ? "Join Arena" 
-                    : `Arena opens in ${timerSystem.formatTime(arenaOpenTimer)}`
-                  }
-              </Button>
-              )}
-              
-              {/* Arena Status & Timers */}
-              {hasJoined && currentSession && (
+              {/* Arena Status & Timers - Always Visible */}
+              {currentSession && (
                 <div className="mt-4 pt-4 border-t border-border space-y-2">
                   {/* Arena Open/Close Timer */}
                   <div>
@@ -2434,6 +2516,21 @@ const Arena = () => {
                     </div>
                   )}
                 </div>
+              )}
+              
+              {/* Join Button - Always Visible When Session Exists */}
+              {!hasJoined && currentSession && (
+              <Button 
+                  onClick={handleJoinArena}
+                className="w-full mt-4"
+                  variant={timerSystem.isArenaOpen(currentSession.opened_at, currentSession.closed_at) ? "default" : "outline"}
+                  disabled={!timerSystem.isArenaOpen(currentSession.opened_at, currentSession.closed_at)}
+                >
+                  {timerSystem.isArenaOpen(currentSession.opened_at, currentSession.closed_at) 
+                    ? "Join Arena" 
+                    : `Arena opens in ${timerSystem.formatTime(arenaOpenTimer)}`
+                  }
+              </Button>
               )}
               
               {/* Action Buttons */}

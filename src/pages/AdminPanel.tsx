@@ -81,8 +81,6 @@ const AdminPanel = () => {
   const [newTechnique, setNewTechnique] = useState({
     name: "",
     description: "",
-    type_info: "",
-    cep: "",
     price: 0,
     level_requirement: 1,
     mentor_id: "",
@@ -97,7 +95,7 @@ const AdminPanel = () => {
     tags: [] as string[],
     energy_cost: 0,
     energy_given: 0,
-    cooldown: 1,
+    cooldown_minutes: 1,
     opponent_status: null as string | null,
     self_status: null as string | null,
     no_hit_m: null as number | null,
@@ -612,8 +610,6 @@ const AdminPanel = () => {
       const { error } = await supabase.from("techniques").insert({
         name: newTechnique.name,
         description: newTechnique.description,
-        type_info: newTechnique.type_info,
-        cep: newTechnique.cep,
         price: newTechnique.price,
         level_requirement: newTechnique.level_requirement,
         mentor_id: newTechnique.mentor_id,
@@ -628,7 +624,7 @@ const AdminPanel = () => {
         tags: newTechnique.tags || [],
         energy_cost: newTechnique.energy_cost || 0,
         energy_given: newTechnique.energy_given || 0,
-        cooldown: newTechnique.cooldown || 1,
+        cooldown_minutes: newTechnique.cooldown_minutes || 1,
         opponent_status: newTechnique.opponent_status || null,
         self_status: newTechnique.self_status || null,
         no_hit_m: newTechnique.no_hit_m || null,
@@ -648,8 +644,6 @@ const AdminPanel = () => {
       setNewTechnique({
         name: "",
         description: "",
-        type_info: "",
-        cep: "",
         price: 0,
         level_requirement: 1,
         mentor_id: "",
@@ -663,7 +657,7 @@ const AdminPanel = () => {
         tags: [],
         energy_cost: 0,
         energy_given: 0,
-        cooldown: 1,
+        cooldown_minutes: 1,
         opponent_status: null,
         self_status: null,
         no_hit_m: null,
@@ -691,8 +685,6 @@ const AdminPanel = () => {
         .update({
           name: editingTechnique.name,
           description: editingTechnique.description,
-          type_info: editingTechnique.type_info,
-          cep: editingTechnique.cep,
           price: editingTechnique.price,
           level_requirement: editingTechnique.level_requirement,
           mentor_id: editingTechnique.mentor_id,
@@ -707,7 +699,7 @@ const AdminPanel = () => {
           tags: editingTechnique.tags || [],
           energy_cost: editingTechnique.energy_cost || 0,
           energy_given: editingTechnique.energy_given || 0,
-          cooldown: editingTechnique.cooldown || 1,
+          cooldown_minutes: editingTechnique.cooldown_minutes || 1,
           opponent_status: editingTechnique.opponent_status || null,
           self_status: editingTechnique.self_status || null,
           no_hit_m: editingTechnique.no_hit_m || null,
@@ -1872,22 +1864,6 @@ const AdminPanel = () => {
                   />
                 </div>
                 <div>
-                  <Label>Type/Category</Label>
-                  <Input
-                    value={newTechnique.type_info}
-                    onChange={(e) => setNewTechnique({...newTechnique, type_info: e.target.value})}
-                    placeholder="e.g., Ninjutsu, Offensive"
-                  />
-                </div>
-                <div>
-                  <Label>CEP</Label>
-                  <Input
-                    value={newTechnique.cep}
-                    onChange={(e) => setNewTechnique({...newTechnique, cep: e.target.value})}
-                    placeholder="e.g., C-rank"
-                  />
-                </div>
-                <div>
                   <Label>Level Requirement</Label>
                   <Input
                     type="number"
@@ -2037,7 +2013,7 @@ const AdminPanel = () => {
                 {/* Cooldown */}
                 <div>
                   <Label>Cooldown (1-7 minutes)</Label>
-                  <Select value={newTechnique.cooldown.toString()} onValueChange={(val) => setNewTechnique({...newTechnique, cooldown: parseInt(val)})}>
+                  <Select value={newTechnique.cooldown_minutes.toString()} onValueChange={(val) => setNewTechnique({...newTechnique, cooldown_minutes: parseInt(val)})}>
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
@@ -2212,8 +2188,6 @@ const AdminPanel = () => {
                     <CardContent className="space-y-2">
                       <p className="text-sm">{tech.description}</p>
                       <div className="flex gap-2 flex-wrap">
-                        <Badge>{tech.cep}</Badge>
-                        <Badge variant="outline">{tech.type_info}</Badge>
                         <Badge variant="outline">Level {tech.level_requirement}</Badge>
                         <Badge variant="outline">{tech.price} tokens</Badge>
                       </div>
@@ -2257,20 +2231,6 @@ const AdminPanel = () => {
                                   <Textarea
                                     value={editingTechnique.description}
                                     onChange={(e) => setEditingTechnique({...editingTechnique, description: e.target.value})}
-                                  />
-                                </div>
-                                <div>
-                                  <Label>Type</Label>
-                                  <Input
-                                    value={editingTechnique.type_info}
-                                    onChange={(e) => setEditingTechnique({...editingTechnique, type_info: e.target.value})}
-                                  />
-                                </div>
-                                <div>
-                                  <Label>CEP</Label>
-                                  <Input
-                                    value={editingTechnique.cep}
-                                    onChange={(e) => setEditingTechnique({...editingTechnique, cep: e.target.value})}
                                   />
                                 </div>
                                 <div>
