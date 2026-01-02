@@ -1791,6 +1791,17 @@ const Arena = () => {
       return;
     }
     
+    // Ensure zones are loaded
+    if (zones.length === 0) {
+      toast({
+        title: "Loading",
+        description: "Zones are still loading. Please wait...",
+        variant: "default",
+      });
+      await fetchZones();
+      return;
+    }
+    
     // Allow zone changes even if not joined, but show a warning
     if (!hasJoined) {
       toast({
@@ -1821,19 +1832,57 @@ const Arena = () => {
       return;
     }
     
-    // Change zone
-    const { error } = await supabase
-      .from("player_positions")
-      .upsert({
-        user_id: userId,
-        zone_id: zoneId,
-        last_moved_at: new Date().toISOString(),
-      });
-
-    if (error) {
+    // Validate zone exists
+    const zoneExists = zones.find((z) => z.id === zoneId);
+    if (!zoneExists) {
       toast({
         title: "Error",
-        description: "Failed to change zone",
+        description: "Invalid zone selected. Please refresh the page.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Change zone - try insert first, then update if needed
+    let error = null;
+    
+    // First, try to get existing position
+    const { data: existingPosition } = await supabase
+      .from("player_positions")
+      .select("id")
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (existingPosition) {
+      // Update existing position
+      const { error: updateError } = await supabase
+        .from("player_positions")
+        .update({
+          zone_id: zoneId,
+          last_moved_at: new Date().toISOString(),
+        })
+        .eq("user_id", userId);
+      error = updateError;
+    } else {
+      // Insert new position
+      const { error: insertError } = await supabase
+        .from("player_positions")
+        .insert({
+          user_id: userId,
+          zone_id: zoneId,
+          last_moved_at: new Date().toISOString(),
+        });
+      error = insertError;
+    }
+
+    if (error) {
+      console.error("Zone change error:", error);
+      console.error("Zone ID:", zoneId);
+      console.error("User ID:", userId);
+      console.error("Zones available:", zones);
+      toast({
+        title: "Error",
+        description: `Failed to change zone: ${error.message || "Unknown error"}. Please check the console for details.`,
         variant: "destructive",
       });
       return;
