@@ -1843,28 +1843,19 @@ const Arena = () => {
       return;
     }
 
-    // Change zone - try insert first, then update if needed
-    let error = null;
-    
-    // First, try to get existing position
-    const { data: existingPosition } = await supabase
+    // Change zone - update first, insert if no record exists
+    const { data: updateData, error: updateError } = await supabase
       .from("player_positions")
-      .select("id")
+      .update({
+        zone_id: zoneId,
+        last_moved_at: new Date().toISOString(),
+      })
       .eq("user_id", userId)
+      .select()
       .maybeSingle();
 
-    if (existingPosition) {
-      // Update existing position
-      const { error: updateError } = await supabase
-        .from("player_positions")
-        .update({
-          zone_id: zoneId,
-          last_moved_at: new Date().toISOString(),
-        })
-        .eq("user_id", userId);
-      error = updateError;
-    } else {
-      // Insert new position
+    // If update didn't affect any rows (no existing record), insert new record
+    if (!updateError && !updateData) {
       const { error: insertError } = await supabase
         .from("player_positions")
         .insert({
@@ -1872,17 +1863,41 @@ const Arena = () => {
           zone_id: zoneId,
           last_moved_at: new Date().toISOString(),
         });
-      error = insertError;
-    }
 
-    if (error) {
-      console.error("Zone change error:", error);
-      console.error("Zone ID:", zoneId);
-      console.error("User ID:", userId);
-      console.error("Zones available:", zones);
+      if (insertError) {
+        console.error("Zone change insert error:", insertError);
+        // If insert fails with conflict, try update one more time (race condition)
+        if (insertError.code === "23505" || insertError.message?.includes("duplicate") || insertError.message?.includes("409")) {
+          const { error: retryError } = await supabase
+            .from("player_positions")
+            .update({
+              zone_id: zoneId,
+              last_moved_at: new Date().toISOString(),
+            })
+            .eq("user_id", userId);
+          
+          if (retryError) {
+            toast({
+              title: "Error",
+              description: `Failed to change zone: ${retryError.message || "Unknown error"}`,
+              variant: "destructive",
+            });
+            return;
+          }
+        } else {
+          toast({
+            title: "Error",
+            description: `Failed to change zone: ${insertError.message || "Unknown error"}`,
+            variant: "destructive",
+          });
+          return;
+        }
+      }
+    } else if (updateError) {
+      console.error("Zone change update error:", updateError);
       toast({
         title: "Error",
-        description: `Failed to change zone: ${error.message || "Unknown error"}. Please check the console for details.`,
+        description: `Failed to change zone: ${updateError.message || "Unknown error"}`,
         variant: "destructive",
       });
       return;
