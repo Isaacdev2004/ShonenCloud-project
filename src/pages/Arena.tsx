@@ -2931,7 +2931,7 @@ const Arena = () => {
                                               });
                                             }}
                                           >
-                                            Teleport to (Costs 3 M)
+                                            Teleport to
                                           </Button>
                                       </div>
                                     )}
