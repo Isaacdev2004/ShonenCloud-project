@@ -879,7 +879,6 @@ const Arena = () => {
     }
   };
 
-  const handleDeleteArenaPost = async (postId: string) => {
   const zoneSignatureImages = [
     { src: "https://i.ibb.co/tTkk6Mwy/Baschool-DONE.jpg", alt: "Baschool" },
     { src: "https://i.ibb.co/PsBSSZ0s/Chunin-DONE.jpg", alt: "Chunin" },
@@ -890,25 +889,6 @@ const Arena = () => {
     { src: "https://i.ibb.co/TD7tdTSX/Shibuya-DONE.jpg", alt: "Shibuya" },
     { src: "https://i.ibb.co/7JkkMy05/Testing-DONE.jpg", alt: "Testing" },
   ];
-
-    const { error } = await supabase
-      .from("arena_posts")
-      .delete()
-      .eq("id", postId);
-
-    if (error) {
-      toast({
-        title: "Error",
-        description: "Failed to delete post",
-        variant: "destructive",
-      });
-    } else {
-      toast({
-        title: "Success",
-        description: "Post deleted",
-      });
-    }
-  };
 
   const getStatusOptions = () => {
     return [
@@ -3094,21 +3074,27 @@ const Arena = () => {
                                             variant={currentTarget === player.user_id ? "default" : "outline"}
                                             className="w-full"
                                             onClick={async () => {
-                                              // Check if in same zone or observing
-                                              const { data: observeStatus } = await supabase
-                                                .from("observe_status")
-                                                .select("expires_at")
-                                                .eq("user_id", userId)
-                                                .gt("expires_at", new Date().toISOString())
-                                                .maybeSingle();
+                                              // If untargeting, always allow (no zone check needed)
+                                              const isUntargeting = currentTarget === player.user_id;
                                               
-                                              if (player.zone_id !== currentZone && !observeStatus) {
-                                                toast({
-                                                  title: "Error",
-                                                  description: "You are not in the same zone",
-                                                  variant: "destructive",
-                                                });
-                                                return;
+                                              // Only check zone when targeting (not untargeting)
+                                              if (!isUntargeting) {
+                                                // Check if in same zone or observing
+                                                const { data: observeStatus } = await supabase
+                                                  .from("observe_status")
+                                                  .select("expires_at")
+                                                  .eq("user_id", userId)
+                                                  .gt("expires_at", new Date().toISOString())
+                                                  .maybeSingle();
+                                                
+                                                if (player.zone_id !== currentZone && !observeStatus) {
+                                                  toast({
+                                                    title: "Error",
+                                                    description: "You are not in the same zone",
+                                                    variant: "destructive",
+                                                  });
+                                                  return;
+                                                }
                                               }
                                               
                                               await handleTargetPlayer(player.user_id);
