@@ -690,6 +690,11 @@ const Arena = () => {
 
       if (error) {
         console.error("Error removing target:", error);
+        toast({
+          title: "Error",
+          description: "Failed to remove target",
+          variant: "destructive",
+        });
         return;
       }
 
@@ -705,6 +710,8 @@ const Arena = () => {
       toast({
         title: "Target removed",
       });
+      // Refresh target state
+      await fetchCurrentTarget(userId);
       return;
     }
 
@@ -718,6 +725,11 @@ const Arena = () => {
 
     if (error) {
       console.error("Error setting target:", error);
+      toast({
+        title: "Error",
+        description: "Failed to set target",
+        variant: "destructive",
+      });
       return;
     }
 
@@ -743,6 +755,9 @@ const Arena = () => {
       title: "Target locked",
       description: "Notification sent to target",
     });
+    
+    // Refresh target state to ensure UI updates
+    await fetchCurrentTarget(userId);
   };
 
   const markAllAsRead = async () => {
@@ -1251,10 +1266,28 @@ const Arena = () => {
   useEffect(() => {
     if (!currentSession) return;
     
-    const updateTimers = () => {
+    const updateTimers = async () => {
       if (currentSession.is_open) {
         const timeUntilClose = timerSystem.getTimeUntilArenaCloses(currentSession.closed_at);
         setArenaOpenTimer(timeUntilClose);
+        
+        // Check if arena should close
+        if (timeUntilClose <= 0 && currentSession.id) {
+          // Arena should close now
+          const closedAt = new Date();
+          const { error } = await supabase
+            .from("arena_sessions")
+            .update({
+              is_open: false,
+              closed_at: closedAt.toISOString()
+            })
+            .eq("id", currentSession.id);
+          
+          if (!error) {
+            // Refresh session
+            await fetchCurrentSession();
+          }
+        }
         
         if (currentSession.battle_timer_ends_at) {
           const battleTime = timerSystem.getRemainingBattleTimer(currentSession.battle_timer_ends_at);
@@ -1262,8 +1295,10 @@ const Arena = () => {
         }
       } else {
         // When closed, calculate next open time based on closed_at
+        let nextOpenTime: Date | null = null;
+        
         if (currentSession.closed_at) {
-          let nextOpenTime = timerSystem.calculateNextArenaOpenTime(new Date(currentSession.closed_at));
+          nextOpenTime = timerSystem.calculateNextArenaOpenTime(new Date(currentSession.closed_at));
           const now = new Date();
           
           // If the calculated next open time is still in the past, keep adding cycles until we get a future time
@@ -1271,25 +1306,75 @@ const Arena = () => {
           while (nextOpenTime <= now) {
             nextOpenTime = timerSystem.calculateNextArenaOpenTime(nextOpenTime);
           }
+        } else if (currentSession.opened_at) {
+          // Fallback: if no closed_at, use opened_at + close duration + open duration
+          const lastOpen = new Date(currentSession.opened_at);
+          let nextOpen = new Date(lastOpen);
+          const totalCycleMinutes = timerSystem.ARENA_OPEN_DURATION_MINUTES + timerSystem.ARENA_CLOSE_DURATION_MINUTES;
+          nextOpen.setMinutes(nextOpen.getMinutes() + totalCycleMinutes);
           
+          // If still in the past, keep adding cycles
+          const now = new Date();
+          while (nextOpen <= now) {
+            nextOpen.setMinutes(nextOpen.getMinutes() + totalCycleMinutes);
+          }
+          nextOpenTime = nextOpen;
+        }
+        
+        if (nextOpenTime) {
           const timeUntilOpen = timerSystem.getTimeUntilArenaOpens(nextOpenTime.toISOString());
           setArenaOpenTimer(timeUntilOpen);
-        } else {
-          // Fallback: if no closed_at, use opened_at + close duration + open duration
-          if (currentSession.opened_at) {
-            const lastOpen = new Date(currentSession.opened_at);
-            let nextOpen = new Date(lastOpen);
-            const totalCycleMinutes = timerSystem.ARENA_OPEN_DURATION_MINUTES + timerSystem.ARENA_CLOSE_DURATION_MINUTES;
-            nextOpen.setMinutes(nextOpen.getMinutes() + totalCycleMinutes);
+          
+          // Check if arena should open now
+          if (timeUntilOpen <= 0) {
+            // Arena should open now
+            const openedAt = new Date();
+            const closedAt = timerSystem.calculateArenaCloseTime(openedAt);
             
-            // If still in the past, keep adding cycles
-            const now = new Date();
-            while (nextOpen <= now) {
-              nextOpen.setMinutes(nextOpen.getMinutes() + totalCycleMinutes);
+            // Get next session number
+            const { data: lastSession } = await supabase
+              .from("arena_sessions")
+              .select("session_number")
+              .order("session_number", { ascending: false })
+              .limit(1)
+              .maybeSingle();
+            
+            const nextSessionNumber = (lastSession?.session_number || 0) + 1;
+            
+            // Update existing session or create new one
+            if (currentSession.id && currentSession.id !== "") {
+              const { error } = await supabase
+                .from("arena_sessions")
+                .update({
+                  is_open: true,
+                  opened_at: openedAt.toISOString(),
+                  closed_at: closedAt.toISOString(),
+                  session_number: nextSessionNumber
+                })
+                .eq("id", currentSession.id);
+              
+              if (!error) {
+                await fetchCurrentSession();
+              }
+            } else {
+              // Create new session
+              const { data: newSession, error } = await supabase
+                .from("arena_sessions")
+                .insert({
+                  session_number: nextSessionNumber,
+                  opened_at: openedAt.toISOString(),
+                  closed_at: closedAt.toISOString(),
+                  is_open: true
+                })
+                .select()
+                .single();
+              
+              if (!error && newSession) {
+                setCurrentSession(newSession);
+              } else {
+                await fetchCurrentSession();
+              }
             }
-            
-            const timeUntilOpen = timerSystem.getTimeUntilArenaOpens(nextOpen.toISOString());
-            setArenaOpenTimer(timeUntilOpen);
           }
         }
       }
@@ -2656,7 +2741,7 @@ const Arena = () => {
               </Button>
               )}
               
-              {/* Action Buttons - Always visible, disabled when not joined */}
+              {/* Action Buttons - Always visible, disabled when not joined or arena closed */}
               <div className="mt-4 space-y-2">
                 <Button 
                   onClick={handleAttack}
@@ -2664,6 +2749,8 @@ const Arena = () => {
                   variant="destructive"
                   disabled={
                     !hasJoined ||
+                    !currentSession ||
+                    !timerSystem.isArenaOpen(currentSession.opened_at, currentSession.closed_at) ||
                     !timerSystem.isCooldownExpired(actionCooldowns["attack"]) ||
                     (lastActionTime && new Date().getTime() - lastActionTime.getTime() < 60000) ||
                     statusSystem.statusBlocksActions(playerStatuses.map(s => s.status))
@@ -2682,6 +2769,8 @@ const Arena = () => {
                   variant="outline"
                   disabled={
                     !hasJoined ||
+                    !currentSession ||
+                    !timerSystem.isArenaOpen(currentSession.opened_at, currentSession.closed_at) ||
                     (lastActionTime && new Date().getTime() - lastActionTime.getTime() < 60000) ||
                     statusSystem.statusBlocksActions(playerStatuses.map(s => s.status))
                   }
@@ -2694,6 +2783,8 @@ const Arena = () => {
                   variant="outline"
                   disabled={
                     !hasJoined ||
+                    !currentSession ||
+                    !timerSystem.isArenaOpen(currentSession.opened_at, currentSession.closed_at) ||
                     mastery < 1 ||
                     !timerSystem.isCooldownExpired(actionCooldowns["observe"]) ||
                     (lastActionTime && new Date().getTime() - lastActionTime.getTime() < 60000) ||

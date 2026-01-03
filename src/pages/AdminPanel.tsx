@@ -431,13 +431,18 @@ const AdminPanel = () => {
   };
 
   const handleDeleteArenaMessage = async (id: string) => {
+    if (!confirm("Are you sure you want to delete this arena message?")) {
+      return;
+    }
+
     const { error } = await supabase
       .from("arena_admin_messages")
       .delete()
       .eq("id", id);
 
     if (error) {
-      toast.error("Failed to delete message");
+      console.error("Error deleting arena message:", error);
+      toast.error(`Failed to delete message: ${error.message}`);
     } else {
       toast.success("Message deleted successfully!");
       fetchArenaMessages();
