@@ -1680,35 +1680,67 @@ const Arena = () => {
   };
   
   const applyDamageToPlayer = async (targetUserId: string, damage: number, source: string) => {
-    // Fetch target's current stats
-    const { data: target } = await supabase
-      .from("profiles")
-      .select("current_hp, max_hp, armor, aura")
-      .eq("id", targetUserId)
-      .single();
-    
-    if (!target) return;
-    
-    const result = statsSystem.applyDamage(
-      damage,
-      target.current_hp || target.max_hp || 100,
-      target.armor || 0,
-      target.aura || 0
-    );
-    
-    // Update target stats
-    await supabase
-      .from("profiles")
-      .update({
-        current_hp: result.newHP,
-        armor: result.newArmor,
-        aura: result.newAura,
-      })
-      .eq("id", targetUserId);
-    
-    // Check for K.O
-    if (result.newHP === 0) {
-      await applyKOStatus(targetUserId);
+    try {
+      // Fetch target's current stats
+      const { data: target, error: fetchError } = await supabase
+        .from("profiles")
+        .select("current_hp, max_hp, armor, aura")
+        .eq("id", targetUserId)
+        .single();
+      
+      if (fetchError) {
+        console.error("Error fetching target stats:", fetchError);
+        toast({
+          title: "Error",
+          description: "Failed to fetch target stats",
+          variant: "destructive",
+        });
+        return;
+      }
+      
+      if (!target) {
+        console.error("Target not found");
+        return;
+      }
+      
+      const result = statsSystem.applyDamage(
+        damage,
+        target.current_hp || target.max_hp || 100,
+        target.armor || 0,
+        target.aura || 0
+      );
+      
+      // Update target stats
+      const { error: updateError } = await supabase
+        .from("profiles")
+        .update({
+          current_hp: result.newHP,
+          armor: result.newArmor,
+          aura: result.newAura,
+        })
+        .eq("id", targetUserId);
+      
+      if (updateError) {
+        console.error("Error updating target stats:", updateError);
+        toast({
+          title: "Error",
+          description: `Failed to apply damage: ${updateError.message}`,
+          variant: "destructive",
+        });
+        return;
+      }
+      
+      // Check for K.O
+      if (result.newHP === 0) {
+        await applyKOStatus(targetUserId);
+      }
+    } catch (error) {
+      console.error("Error in applyDamageToPlayer:", error);
+      toast({
+        title: "Error",
+        description: "An unexpected error occurred while applying damage",
+        variant: "destructive",
+      });
     }
   };
   

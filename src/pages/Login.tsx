@@ -35,7 +35,7 @@ const Login = () => {
         toast.error("Cannot connect to Supabase. Please check your internet connection and verify your Supabase project is active.");
         console.error('Supabase connection error:', error);
       } else {
-        toast.error(error.message || "Failed to login");
+      toast.error(error.message || "Failed to login");
       }
     } finally {
       setLoading(false);
