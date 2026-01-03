@@ -1267,7 +1267,41 @@ const Arena = () => {
     if (!currentSession) return;
     
     const updateTimers = async () => {
-      if (currentSession.is_open) {
+      // Validate session state against actual time
+      const actualIsOpen = timerSystem.isArenaOpen(currentSession.opened_at, currentSession.closed_at);
+      
+      // If state doesn't match actual time, correct it
+      if (currentSession.id && currentSession.id !== "" && currentSession.is_open !== actualIsOpen) {
+        if (actualIsOpen && !currentSession.is_open) {
+          // Should be open but marked as closed - open it
+          const openedAt = new Date();
+          const closedAt = timerSystem.calculateArenaCloseTime(openedAt);
+          await supabase
+            .from("arena_sessions")
+            .update({
+              is_open: true,
+              opened_at: openedAt.toISOString(),
+              closed_at: closedAt.toISOString()
+            })
+            .eq("id", currentSession.id);
+          await fetchCurrentSession();
+          return;
+        } else if (!actualIsOpen && currentSession.is_open) {
+          // Should be closed but marked as open - close it
+          const closedAt = new Date();
+          await supabase
+            .from("arena_sessions")
+            .update({
+              is_open: false,
+              closed_at: closedAt.toISOString()
+            })
+            .eq("id", currentSession.id);
+          await fetchCurrentSession();
+          return;
+        }
+      }
+      
+      if (currentSession.is_open && actualIsOpen) {
         const timeUntilClose = timerSystem.getTimeUntilArenaCloses(currentSession.closed_at);
         setArenaOpenTimer(timeUntilClose);
         
@@ -1296,25 +1330,29 @@ const Arena = () => {
       } else {
         // When closed, calculate next open time based on closed_at
         let nextOpenTime: Date | null = null;
+        const now = new Date();
         
         if (currentSession.closed_at) {
-          nextOpenTime = timerSystem.calculateNextArenaOpenTime(new Date(currentSession.closed_at));
-          const now = new Date();
+          // Start from the closed_at time
+          let baseTime = new Date(currentSession.closed_at);
+          nextOpenTime = timerSystem.calculateNextArenaOpenTime(baseTime);
           
-          // If the calculated next open time is still in the past, keep adding cycles until we get a future time
+          // If the calculated next open time is still in the past, keep adding full cycles until we get a future time
           const totalCycleMinutes = timerSystem.ARENA_OPEN_DURATION_MINUTES + timerSystem.ARENA_CLOSE_DURATION_MINUTES;
           while (nextOpenTime <= now) {
-            nextOpenTime = timerSystem.calculateNextArenaOpenTime(nextOpenTime);
+            // Add a full cycle (50 minutes) to get to the next open window
+            baseTime.setMinutes(baseTime.getMinutes() + totalCycleMinutes);
+            nextOpenTime = timerSystem.calculateNextArenaOpenTime(baseTime);
           }
         } else if (currentSession.opened_at) {
           // Fallback: if no closed_at, use opened_at + close duration + open duration
           const lastOpen = new Date(currentSession.opened_at);
           let nextOpen = new Date(lastOpen);
           const totalCycleMinutes = timerSystem.ARENA_OPEN_DURATION_MINUTES + timerSystem.ARENA_CLOSE_DURATION_MINUTES;
-          nextOpen.setMinutes(nextOpen.getMinutes() + totalCycleMinutes);
+          // Add close duration to get to next open time
+          nextOpen.setMinutes(nextOpen.getMinutes() + timerSystem.ARENA_CLOSE_DURATION_MINUTES);
           
           // If still in the past, keep adding cycles
-          const now = new Date();
           while (nextOpen <= now) {
             nextOpen.setMinutes(nextOpen.getMinutes() + totalCycleMinutes);
           }
