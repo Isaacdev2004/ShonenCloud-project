@@ -1091,11 +1091,30 @@ const Arena = () => {
           is_open: false,
         });
       } else {
-        // No sessions exist - create the first one
+        // No sessions exist - calculate the next open time from now
         const now = new Date();
-        const openedAt = new Date(now);
-        openedAt.setMinutes(0, 0, 0); // Start of current hour
-        const closedAt = timerSystem.calculateArenaCloseTime(openedAt);
+        const totalCycleMinutes = timerSystem.ARENA_OPEN_DURATION_MINUTES + timerSystem.ARENA_CLOSE_DURATION_MINUTES; // 50 minutes
+        
+        // Start from the beginning of the current hour
+        let nextOpenTime = new Date(now);
+        nextOpenTime.setMinutes(0, 0, 0);
+        nextOpenTime.setSeconds(0, 0);
+        
+        // Find the next open time that's in the future
+        // Arena cycles: open for 20 min, close for 30 min (total 50 min per cycle)
+        while (nextOpenTime <= now) {
+          // Check if we're in an open window
+          const potentialCloseTime = timerSystem.calculateArenaCloseTime(nextOpenTime);
+          if (now >= nextOpenTime && now < potentialCloseTime) {
+            // We're in an open window, use this time
+            break;
+          }
+          // Move to next cycle
+          nextOpenTime.setMinutes(nextOpenTime.getMinutes() + totalCycleMinutes);
+        }
+        
+        const nextCloseTime = timerSystem.calculateArenaCloseTime(nextOpenTime);
+        const isCurrentlyOpen = timerSystem.isArenaOpen(nextOpenTime.toISOString(), nextCloseTime.toISOString());
         
         // Check if we should create a new session
         const { data: allSessions } = await supabase
@@ -1109,9 +1128,9 @@ const Arena = () => {
             .from("arena_sessions")
             .insert({
               session_number: 1,
-              opened_at: openedAt.toISOString(),
-              closed_at: closedAt.toISOString(),
-              is_open: timerSystem.isArenaOpen(openedAt.toISOString(), closedAt.toISOString()),
+              opened_at: nextOpenTime.toISOString(),
+              closed_at: nextCloseTime.toISOString(),
+              is_open: isCurrentlyOpen,
             })
             .select()
             .single();
@@ -1119,17 +1138,28 @@ const Arena = () => {
           if (!createError && newSession) {
             setCurrentSession(newSession);
           } else {
-            // Fallback: show a session that opens now
+            // Fallback: show a session
             setCurrentSession({
               id: "",
               session_number: 0,
-              opened_at: openedAt.toISOString(),
-              closed_at: closedAt.toISOString(),
+              opened_at: nextOpenTime.toISOString(),
+              closed_at: nextCloseTime.toISOString(),
               battle_started_at: null,
               battle_timer_ends_at: null,
-              is_open: timerSystem.isArenaOpen(openedAt.toISOString(), closedAt.toISOString()),
+              is_open: isCurrentlyOpen,
             });
           }
+        } else {
+          // Sessions exist but none are open - show next open time
+          setCurrentSession({
+            id: "",
+            session_number: 0,
+            opened_at: nextOpenTime.toISOString(),
+            closed_at: nextCloseTime.toISOString(),
+            battle_started_at: null,
+            battle_timer_ends_at: null,
+            is_open: isCurrentlyOpen,
+          });
         }
       }
     }
@@ -1233,15 +1263,31 @@ const Arena = () => {
       } else {
         // When closed, calculate next open time based on closed_at
         if (currentSession.closed_at) {
-          const nextOpenTime = timerSystem.calculateNextArenaOpenTime(new Date(currentSession.closed_at));
+          let nextOpenTime = timerSystem.calculateNextArenaOpenTime(new Date(currentSession.closed_at));
+          const now = new Date();
+          
+          // If the calculated next open time is still in the past, keep adding cycles until we get a future time
+          const totalCycleMinutes = timerSystem.ARENA_OPEN_DURATION_MINUTES + timerSystem.ARENA_CLOSE_DURATION_MINUTES;
+          while (nextOpenTime <= now) {
+            nextOpenTime = timerSystem.calculateNextArenaOpenTime(nextOpenTime);
+          }
+          
           const timeUntilOpen = timerSystem.getTimeUntilArenaOpens(nextOpenTime.toISOString());
           setArenaOpenTimer(timeUntilOpen);
         } else {
           // Fallback: if no closed_at, use opened_at + close duration + open duration
           if (currentSession.opened_at) {
             const lastOpen = new Date(currentSession.opened_at);
-            const nextOpen = new Date(lastOpen);
-            nextOpen.setMinutes(nextOpen.getMinutes() + timerSystem.ARENA_OPEN_DURATION_MINUTES + timerSystem.ARENA_CLOSE_DURATION_MINUTES);
+            let nextOpen = new Date(lastOpen);
+            const totalCycleMinutes = timerSystem.ARENA_OPEN_DURATION_MINUTES + timerSystem.ARENA_CLOSE_DURATION_MINUTES;
+            nextOpen.setMinutes(nextOpen.getMinutes() + totalCycleMinutes);
+            
+            // If still in the past, keep adding cycles
+            const now = new Date();
+            while (nextOpen <= now) {
+              nextOpen.setMinutes(nextOpen.getMinutes() + totalCycleMinutes);
+            }
+            
             const timeUntilOpen = timerSystem.getTimeUntilArenaOpens(nextOpen.toISOString());
             setArenaOpenTimer(timeUntilOpen);
           }
