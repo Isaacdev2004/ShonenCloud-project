@@ -510,6 +510,49 @@ const Arena = () => {
     return playerPositions.filter((p) => p.zone_id === zoneId);
   };
 
+  const handleDeleteArenaPost = async (postId: string) => {
+    if (!isAdmin) {
+      toast({
+        title: "Error",
+        description: "You don't have permission to delete posts",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Try to delete from arena_posts first
+    const { error: arenaPostError } = await supabase
+      .from("arena_posts")
+      .delete()
+      .eq("id", postId);
+
+    if (arenaPostError) {
+      // If not found in arena_posts, try battle_feed
+      const { error: battleFeedError } = await supabase
+        .from("battle_feed")
+        .delete()
+        .eq("id", postId);
+
+      if (battleFeedError) {
+        console.error("Error deleting arena post:", battleFeedError);
+        toast({
+          title: "Error",
+          description: `Failed to delete post: ${battleFeedError.message}`,
+          variant: "destructive",
+        });
+        return;
+      }
+    }
+
+    toast({
+      title: "Success",
+      description: "Post deleted successfully",
+    });
+
+    // Refresh arena posts
+    fetchArenaPosts();
+  };
+
   const fetchArenaMessage = async () => {
     const { data, error } = await supabase
       .from("arena_admin_messages")

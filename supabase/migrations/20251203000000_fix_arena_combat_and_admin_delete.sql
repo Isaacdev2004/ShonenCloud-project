@@ -34,3 +34,9 @@ USING (
   admin_id = auth.uid()
 );
 
+-- Add RLS policy for admins to delete battle_feed entries
+CREATE POLICY "Admins can delete battle feed entries"
+ON public.battle_feed
+FOR DELETE
+USING (has_role(auth.uid(), 'admin'::app_role));
+
