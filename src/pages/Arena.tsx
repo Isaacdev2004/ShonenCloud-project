@@ -183,6 +183,7 @@ const Arena = () => {
   const [playerStatuses, setPlayerStatuses] = useState<PlayerStatus[]>([]);
   const [actionCooldowns, setActionCooldowns] = useState<Record<string, string>>({});
   const [techniqueCooldowns, setTechniqueCooldowns] = useState<Record<string, string>>({});
+  const [cooldownsLoaded, setCooldownsLoaded] = useState(false);
   const [battleFeed, setBattleFeed] = useState<BattleFeedEntry[]>([]);
   const [vanishingToasts, setVanishingToasts] = useState<VanishingToast[]>([]);
   const [selectedZoneTarget, setSelectedZoneTarget] = useState<string | null>(null);
@@ -320,9 +321,46 @@ const Arena = () => {
       // New Arena System Stats
       setCurrentHP(data.current_hp ?? data.max_hp ?? 100);
       setMaxHP(data.max_hp ?? statsSystem.calculateMaxHP(data.level || 1));
-      setCurrentATK(data.current_atk ?? data.max_atk ?? 20);
+      
+      // Check and apply temporary ATK boosts from red_orb_effects
+      const { data: redOrbData } = await supabase
+        .from("red_orb_effects")
+        .select("atk_boost, expires_at")
+        .eq("user_id", id)
+        .gt("expires_at", new Date().toISOString())
+        .maybeSingle();
+      
+      let baseATK = data.current_atk ?? data.max_atk ?? 20;
+      if (redOrbData && redOrbData.atk_boost) {
+        baseATK = (data.max_atk ?? statsSystem.calculateMaxATK(data.level || 1)) + redOrbData.atk_boost;
+      } else {
+        // Remove expired ATK boost - reset to max_atk
+        baseATK = data.max_atk ?? statsSystem.calculateMaxATK(data.level || 1);
+        if (data.current_atk && data.current_atk > baseATK) {
+          // Update database to remove expired boost
+          await supabase
+            .from("profiles")
+            .update({ current_atk: baseATK })
+            .eq("id", id);
+        }
+      }
+      setCurrentATK(baseATK);
       setMaxATK(data.max_atk ?? statsSystem.calculateMaxATK(data.level || 1));
-      setAura(data.aura || 0);
+      
+      // Check if Aura has expired
+      let auraValue = data.aura || 0;
+      if (data.aura_expires_at && statsSystem.isAuraExpired(data.aura_expires_at)) {
+        // Aura expired, reset to 0
+        auraValue = 0;
+        await supabase
+          .from("profiles")
+          .update({ 
+            aura: 0,
+            aura_expires_at: null
+          })
+          .eq("id", id);
+      }
+      setAura(auraValue);
       setMastery(Number(data.mastery) || 0);
       
       // Set current target
@@ -361,7 +399,7 @@ const Arena = () => {
       const userIds = positions.map(p => p.user_id);
       const { data: profiles, error: profError } = await supabase
         .from("profiles")
-        .select("id, username, profile_picture_url, health, armor, energy, discipline")
+        .select("id, username, profile_picture_url, health, armor, energy, discipline, current_hp, max_hp, current_atk, max_atk, aura")
         .in("id", userIds);
 
       if (profError) {
@@ -415,6 +453,13 @@ const Arena = () => {
       supabase.removeChannel(profilesChannel);
     };
   }, []);
+
+  // Refresh player positions when popup opens to ensure fresh stats
+  useEffect(() => {
+    if (showPlayerPopup) {
+      fetchPlayerPositions();
+    }
+  }, [showPlayerPopup]);
 
   const handleUpdateStats = async () => {
     if (!userId) return;
@@ -520,37 +565,72 @@ const Arena = () => {
       return;
     }
 
-    // Try to delete from arena_posts first
-    const { error: arenaPostError } = await supabase
-      .from("arena_posts")
+    // Confirm deletion
+    if (!confirm("Are you sure you want to delete this post?")) {
+      return;
+    }
+
+    // Try to delete from battle_feed first (newer system)
+    const { data: battleFeedData, error: battleFeedError } = await supabase
+      .from("battle_feed")
       .delete()
-      .eq("id", postId);
+      .eq("id", postId)
+      .select();
 
-    if (arenaPostError) {
-      // If not found in arena_posts, try battle_feed
-      const { error: battleFeedError } = await supabase
-        .from("battle_feed")
+    if (battleFeedError) {
+      console.error("Battle feed delete error:", battleFeedError);
+      // If not found in battle_feed, try arena_posts
+      const { data: arenaPostData, error: arenaPostError } = await supabase
+        .from("arena_posts")
         .delete()
-        .eq("id", postId);
+        .eq("id", postId)
+        .select();
 
-      if (battleFeedError) {
-        console.error("Error deleting arena post:", battleFeedError);
+      if (arenaPostError) {
+        console.error("Arena post delete error:", arenaPostError);
+        const errorMsg = arenaPostError.message || arenaPostError.code || "Unknown error";
         toast({
           title: "Error",
-          description: `Failed to delete post: ${battleFeedError.message}`,
+          description: `Failed to delete post: ${errorMsg}. Error details: ${JSON.stringify(arenaPostError)}`,
+          variant: "destructive",
+        });
+        return;
+      } else if (arenaPostData && arenaPostData.length > 0) {
+        // Successfully deleted from arena_posts
+        toast({
+          title: "Success",
+          description: "Post deleted successfully",
+        });
+        fetchArenaPosts();
+        return;
+      } else {
+        // No rows deleted from either table
+        toast({
+          title: "Error",
+          description: "Post not found or already deleted",
           variant: "destructive",
         });
         return;
       }
+    } else if (battleFeedData && battleFeedData.length > 0) {
+      // Successfully deleted from battle_feed
+      toast({
+        title: "Success",
+        description: "Post deleted successfully",
+      });
+      // Refresh both feeds
+      fetchBattleFeed();
+      fetchArenaPosts();
+      return;
+    } else {
+      // No rows deleted - might be RLS policy issue
+      const errorMsg = battleFeedError?.message || "Post not found or RLS policy blocking deletion";
+      toast({
+        title: "Error",
+        description: errorMsg,
+        variant: "destructive",
+      });
     }
-
-    toast({
-      title: "Success",
-      description: "Post deleted successfully",
-    });
-
-    // Refresh arena posts
-    fetchArenaPosts();
   };
 
   const fetchArenaMessage = async () => {
@@ -1131,7 +1211,7 @@ const Arena = () => {
       } else {
         // No sessions exist - calculate the next open time from now
         const now = new Date();
-        const totalCycleMinutes = timerSystem.ARENA_OPEN_DURATION_MINUTES + timerSystem.ARENA_CLOSE_DURATION_MINUTES; // 50 minutes
+        const totalCycleMinutes = timerSystem.ARENA_OPEN_DURATION_MINUTES + timerSystem.ARENA_CLOSE_DURATION_MINUTES; // 60 minutes (40 open + 20 closed)
         
         // Start from the beginning of the current hour
         let nextOpenTime = new Date(now);
@@ -1139,7 +1219,7 @@ const Arena = () => {
         nextOpenTime.setSeconds(0, 0);
         
         // Find the next open time that's in the future
-        // Arena cycles: open for 20 min, close for 30 min (total 50 min per cycle)
+        // Arena cycles: open for 40 min, close for 20 min (total 60 min per cycle)
         while (nextOpenTime <= now) {
           // Check if we're in an open window
           const potentialCloseTime = timerSystem.calculateArenaCloseTime(nextOpenTime);
@@ -1361,9 +1441,9 @@ const Arena = () => {
           nextOpenTime = timerSystem.calculateNextArenaOpenTime(baseTime);
           
           // If the calculated next open time is still in the past, keep adding full cycles until we get a future time
-          const totalCycleMinutes = timerSystem.ARENA_OPEN_DURATION_MINUTES + timerSystem.ARENA_CLOSE_DURATION_MINUTES;
+          const totalCycleMinutes = timerSystem.ARENA_OPEN_DURATION_MINUTES + timerSystem.ARENA_CLOSE_DURATION_MINUTES; // 60 minutes
           while (nextOpenTime <= now) {
-            // Add a full cycle (50 minutes) to get to the next open window
+            // Add a full cycle (60 minutes) to get to the next open window
             baseTime.setMinutes(baseTime.getMinutes() + totalCycleMinutes);
             nextOpenTime = timerSystem.calculateNextArenaOpenTime(baseTime);
           }
@@ -1371,7 +1451,7 @@ const Arena = () => {
           // Fallback: if no closed_at, use opened_at + close duration + open duration
           const lastOpen = new Date(currentSession.opened_at);
           let nextOpen = new Date(lastOpen);
-          const totalCycleMinutes = timerSystem.ARENA_OPEN_DURATION_MINUTES + timerSystem.ARENA_CLOSE_DURATION_MINUTES;
+          const totalCycleMinutes = timerSystem.ARENA_OPEN_DURATION_MINUTES + timerSystem.ARENA_CLOSE_DURATION_MINUTES; // 60 minutes
           // Add close duration to get to next open time
           nextOpen.setMinutes(nextOpen.getMinutes() + timerSystem.ARENA_CLOSE_DURATION_MINUTES);
           
@@ -1501,22 +1581,47 @@ const Arena = () => {
         .gt("expires_at", new Date().toISOString()),
     ]);
     
-    if (actionData.data) {
+    // Always initialize state, even if empty
+    if (actionData.data && actionData.data.length > 0) {
       const cooldowns: Record<string, string> = {};
       actionData.data.forEach(cd => {
         cooldowns[cd.action_type] = cd.expires_at;
       });
       setActionCooldowns(cooldowns);
+    } else {
+      // Initialize empty if no cooldowns
+      setActionCooldowns({});
     }
     
-    if (techniqueData.data) {
+    if (techniqueData.data && techniqueData.data.length > 0) {
       const cooldowns: Record<string, string> = {};
       techniqueData.data.forEach(cd => {
         cooldowns[cd.technique_id] = cd.expires_at;
       });
       setTechniqueCooldowns(cooldowns);
+    } else {
+      // Initialize empty if no cooldowns
+      setTechniqueCooldowns({});
     }
+    
+    // Mark cooldowns as loaded
+    setCooldownsLoaded(true);
   };
+  
+  // Refresh cooldowns periodically to keep them in sync
+  useEffect(() => {
+    if (!userId) return;
+    
+    // Fetch cooldowns immediately
+    fetchCooldowns(userId);
+    
+    // Then refresh every 5 seconds to catch any updates
+    const interval = setInterval(() => {
+      fetchCooldowns(userId);
+    }, 5000);
+    
+    return () => clearInterval(interval);
+  }, [userId]);
   
   // Battle Feed
   const fetchBattleFeed = async () => {
@@ -1633,9 +1738,40 @@ const Arena = () => {
       return;
     }
 
-    // Check cooldown
+    // Block action until cooldowns are loaded
+    if (!cooldownsLoaded) {
+      toast({
+        title: "Loading",
+        description: "Please wait while cooldowns are being loaded...",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Check cooldown in state first
     if (actionCooldowns["attack"] && !timerSystem.isCooldownExpired(actionCooldowns["attack"])) {
       const remaining = timerSystem.getRemainingCooldown(actionCooldowns["attack"]);
+      toast({
+        title: "On Cooldown",
+        description: `Attack is on cooldown. ${timerSystem.formatTime(remaining)} remaining.`,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Double-check cooldown in database (prevents refresh exploit)
+    const { data: cooldownData } = await supabase
+      .from("action_cooldowns")
+      .select("expires_at")
+      .eq("user_id", userId)
+      .eq("action_type", "attack")
+      .gt("expires_at", new Date().toISOString())
+      .maybeSingle();
+
+    if (cooldownData && !timerSystem.isCooldownExpired(cooldownData.expires_at)) {
+      const remaining = timerSystem.getRemainingCooldown(cooldownData.expires_at);
+      // Update state with database value
+      setActionCooldowns(prev => ({ ...prev, attack: cooldownData.expires_at }));
       toast({
         title: "On Cooldown",
         description: `Attack is on cooldown. ${timerSystem.formatTime(remaining)} remaining.`,
@@ -1943,6 +2079,16 @@ const Arena = () => {
       });
       return;
     }
+
+    // Block action until cooldowns are loaded
+    if (!cooldownsLoaded) {
+      toast({
+        title: "Loading",
+        description: "Please wait while cooldowns are being loaded...",
+        variant: "destructive",
+      });
+      return;
+    }
     
     // Check Mastery requirement
     if (mastery < 1) {
@@ -1954,9 +2100,30 @@ const Arena = () => {
       return;
     }
     
-    // Check cooldown
+    // Check cooldown in state first
     if (actionCooldowns["observe"] && !timerSystem.isCooldownExpired(actionCooldowns["observe"])) {
       const remaining = timerSystem.getRemainingCooldown(actionCooldowns["observe"]);
+      toast({
+        title: "On Cooldown",
+        description: `Observe is on cooldown. ${timerSystem.formatTime(remaining)} remaining.`,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Double-check cooldown in database (prevents refresh exploit)
+    const { data: cooldownData } = await supabase
+      .from("action_cooldowns")
+      .select("expires_at")
+      .eq("user_id", userId)
+      .eq("action_type", "observe")
+      .gt("expires_at", new Date().toISOString())
+      .maybeSingle();
+
+    if (cooldownData && !timerSystem.isCooldownExpired(cooldownData.expires_at)) {
+      const remaining = timerSystem.getRemainingCooldown(cooldownData.expires_at);
+      // Update state with database value
+      setActionCooldowns(prev => ({ ...prev, observe: cooldownData.expires_at }));
       toast({
         title: "On Cooldown",
         description: `Observe is on cooldown. ${timerSystem.formatTime(remaining)} remaining.`,
@@ -2047,10 +2214,41 @@ const Arena = () => {
         variant: "default",
       });
     }
+
+    // Block action until cooldowns are loaded
+    if (!cooldownsLoaded) {
+      toast({
+        title: "Loading",
+        description: "Please wait while cooldowns are being loaded...",
+        variant: "destructive",
+      });
+      return;
+    }
     
-    // Check cooldown
+    // Check cooldown in state first
     if (actionCooldowns["change_zone"] && !timerSystem.isCooldownExpired(actionCooldowns["change_zone"])) {
       const remaining = timerSystem.getRemainingCooldown(actionCooldowns["change_zone"]);
+      toast({
+        title: "On Cooldown",
+        description: `Change Zone is on cooldown. ${timerSystem.formatTime(remaining)} remaining.`,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Double-check cooldown in database (prevents refresh exploit)
+    const { data: cooldownData } = await supabase
+      .from("action_cooldowns")
+      .select("expires_at")
+      .eq("user_id", userId)
+      .eq("action_type", "change_zone")
+      .gt("expires_at", new Date().toISOString())
+      .maybeSingle();
+
+    if (cooldownData && !timerSystem.isCooldownExpired(cooldownData.expires_at)) {
+      const remaining = timerSystem.getRemainingCooldown(cooldownData.expires_at);
+      // Update state with database value
+      setActionCooldowns(prev => ({ ...prev, change_zone: cooldownData.expires_at }));
       toast({
         title: "On Cooldown",
         description: `Change Zone is on cooldown. ${timerSystem.formatTime(remaining)} remaining.`,
@@ -3153,12 +3351,29 @@ const Arena = () => {
                                               // Deduct Mastery and teleport
                                               const newMastery = mastery - 3;
                                               setMastery(newMastery);
-                                              await supabase
+                                              const { error: masteryError } = await supabase
                                                 .from("profiles")
                                                 .update({ mastery: newMastery })
                                                 .eq("id", userId);
                                               
+                                              if (masteryError) {
+                                                toast({
+                                                  title: "Error",
+                                                  description: "Failed to deduct Mastery",
+                                                  variant: "destructive",
+                                                });
+                                                return;
+                                              }
+                                              
+                                              // Teleport to target's zone
                                               await handleChangeZoneNew(player.zone_id);
+                                              
+                                              // Refresh player positions to update UI
+                                              await fetchPlayerPositions();
+                                              
+                                              // Update current zone state
+                                              setCurrentZone(player.zone_id);
+                                              
                                               setShowPlayerPopup(null);
                                               
                                               toast({

@@ -2,8 +2,8 @@
 // Handles open/close times, battle timer, and session management
 
 // Arena session constants
-export const ARENA_OPEN_DURATION_MINUTES = 20;
-export const ARENA_CLOSE_DURATION_MINUTES = 30;
+export const ARENA_OPEN_DURATION_MINUTES = 40;
+export const ARENA_CLOSE_DURATION_MINUTES = 20;
 export const BATTLE_TIMER_SECONDS = 60;
 export const BATTLE_SETUP_PHASE_SECONDS = 30; // First 30 seconds
 
