@@ -1649,6 +1649,40 @@ const Arena = () => {
           .gt("expires_at", new Date().toISOString()),
       ]);
       
+      // Check for network errors - Supabase errors might not contain network error details
+      // Network errors are typically caught in the catch block, but check here too
+      if (actionData.error) {
+        // Only log non-network errors (network errors are expected during connectivity issues)
+        // Supabase errors for network issues might not have specific messages, so we'll be lenient
+        const errorMsg = actionData.error.message?.toLowerCase() || '';
+        const isNetworkError = errorMsg.includes('fetch') || 
+                               errorMsg.includes('network') ||
+                               errorMsg.includes('failed') ||
+                               errorMsg.includes('timeout') ||
+                               actionData.error.code === 'PGRST116' || // PostgREST connection error
+                               actionData.error.code === 'PGRST301';   // PostgREST timeout
+        if (!isNetworkError) {
+          console.error("Error fetching action cooldowns:", actionData.error);
+        }
+        // Don't update state on network errors - preserve existing state
+        return;
+      }
+      
+      if (techniqueData.error) {
+        const errorMsg = techniqueData.error.message?.toLowerCase() || '';
+        const isNetworkError = errorMsg.includes('fetch') || 
+                               errorMsg.includes('network') ||
+                               errorMsg.includes('failed') ||
+                               errorMsg.includes('timeout') ||
+                               techniqueData.error.code === 'PGRST116' ||
+                               techniqueData.error.code === 'PGRST301';
+        if (!isNetworkError) {
+          console.error("Error fetching technique cooldowns:", techniqueData.error);
+        }
+        // Don't update state on network errors - preserve existing state
+        return;
+      }
+      
       // Always initialize state, even if empty
       // Merge with existing state to preserve any cooldowns that might have been set locally
       if (actionData.data && actionData.data.length > 0) {
@@ -1677,9 +1711,27 @@ const Arena = () => {
       
       // Mark cooldowns as loaded ONLY after successful fetch
       setCooldownsLoaded(true);
-    } catch (error) {
-      console.error("Error fetching cooldowns:", error);
+    } catch (error: any) {
+      // Check if it's a network error - browser network errors are typically thrown as exceptions
+      const errorMsg = error?.message?.toLowerCase() || '';
+      const errorName = error?.name?.toLowerCase() || '';
+      const isNetworkError = errorMsg.includes('fetch') || 
+                             errorMsg.includes('network') ||
+                             errorMsg.includes('err_name_not_resolved') ||
+                             errorMsg.includes('err_network_changed') ||
+                             errorMsg.includes('failed to fetch') ||
+                             errorName === 'networkerror' ||
+                             errorName === 'typeerror' ||
+                             error?.code === 'ERR_NAME_NOT_RESOLVED' ||
+                             error?.code === 'ERR_NETWORK_CHANGED';
+      
+      // Suppress network error logs (they're expected during connectivity issues)
+      // Only log actual application errors
+      if (!isNetworkError) {
+        console.error("Error fetching cooldowns:", error);
+      }
       // Don't set cooldownsLoaded to true on error - this prevents actions until cooldowns are properly loaded
+      // But don't block if it's just a network error (preserve existing state)
     }
   };
   
@@ -2329,7 +2381,20 @@ const Arena = () => {
       .maybeSingle();
 
     if (cooldownError) {
-      console.error("Error checking cooldown:", cooldownError);
+      // Only log non-network errors (network errors are expected during connectivity issues)
+      const errorMsg = cooldownError.message?.toLowerCase() || '';
+      const isNetworkError = errorMsg.includes('fetch') || 
+                             errorMsg.includes('network') ||
+                             errorMsg.includes('failed') ||
+                             errorMsg.includes('timeout') ||
+                             cooldownError.code === 'PGRST116' ||
+                             cooldownError.code === 'PGRST301';
+      if (!isNetworkError) {
+        console.error("Error checking cooldown:", cooldownError);
+      }
+      // On network error, fall back to state check (better than blocking user)
+      // This allows the action to proceed if network is temporarily unavailable
+      // Note: This is a trade-off between security and UX during network issues
     }
 
     // If cooldown exists in database, use it (even if state says otherwise)
