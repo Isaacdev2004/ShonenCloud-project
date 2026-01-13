@@ -1664,8 +1664,14 @@ const Arena = () => {
         if (!isNetworkError) {
           console.error("Error fetching action cooldowns:", actionData.error);
         }
-        // Don't update state on network errors - preserve existing state
-        return;
+        // On network error, still try to initialize state if we have data
+        // This prevents blocking actions when network is temporarily unavailable
+        if (!actionData.data) {
+          // Only return if we have no data AND it's a network error
+          // This preserves existing state
+          return;
+        }
+        // If we have data despite error, continue processing it
       }
       
       if (techniqueData.error) {
@@ -1679,8 +1685,11 @@ const Arena = () => {
         if (!isNetworkError) {
           console.error("Error fetching technique cooldowns:", techniqueData.error);
         }
-        // Don't update state on network errors - preserve existing state
-        return;
+        // On network error, still try to initialize state if we have data
+        if (!techniqueData.data) {
+          // Only skip if we have no data
+          // Continue processing if we have data despite error
+        }
       }
       
       // Always initialize state, even if empty
@@ -2506,15 +2515,38 @@ const Arena = () => {
     
     // Set cooldown (5 minutes)
     const cooldownExpires = timerSystem.calculateCooldownExpiration(5);
-    await supabase
-      .from("action_cooldowns")
-      .upsert({
-        user_id: userId,
-        action_type: "change_zone",
-        expires_at: cooldownExpires.toISOString(),
-      });
     
+    // Try update first (most common case - cooldown already exists)
+    const { data: updateData, error: updateError } = await supabase
+      .from("action_cooldowns")
+      .update({ expires_at: cooldownExpires.toISOString() })
+      .eq("user_id", userId)
+      .eq("action_type", "change_zone")
+      .select();
+    
+    // If update didn't affect any rows (no existing record), insert new one
+    if (!updateData || updateData.length === 0) {
+      const { error: insertError } = await supabase
+        .from("action_cooldowns")
+        .insert({
+          user_id: userId,
+          action_type: "change_zone",
+          expires_at: cooldownExpires.toISOString(),
+        });
+      
+      if (insertError && insertError.code !== '23505') { // Ignore duplicate key errors (race condition)
+        console.error("Error inserting change_zone cooldown:", insertError);
+      }
+    } else if (updateError) {
+      console.error("Error updating change_zone cooldown:", updateError);
+    }
+    
+    // Update state immediately
     setActionCooldowns(prev => ({ ...prev, change_zone: cooldownExpires.toISOString() }));
+    
+    // Refresh cooldowns from database to ensure sync
+    await fetchCooldowns(userId);
+    
     const now = new Date();
     setLastActionTime(now);
     
