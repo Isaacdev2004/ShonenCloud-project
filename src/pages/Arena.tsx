@@ -1018,9 +1018,17 @@ const Arena = () => {
       return;
     }
 
+    // Filter posts to only show those created within the last 5 minutes (auto-delete after 5 minutes)
+    const now = new Date();
+    const fiveMinutesAgo = new Date(now.getTime() - 5 * 60 * 1000);
+    const recentPosts = allPosts.filter((post: any) => {
+      const postDate = new Date(post.created_at);
+      return postDate >= fiveMinutesAgo;
+    });
+
     // Sort by created_at and limit
-    allPosts.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-    const limitedPosts = allPosts.slice(0, 50);
+    recentPosts.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    const limitedPosts = recentPosts.slice(0, 50);
 
     const userIds = Array.from(new Set(limitedPosts.map((post) => post.user_id)));
 
@@ -1163,7 +1171,8 @@ const Arena = () => {
   
   // Join System
   const fetchCurrentSession = async () => {
-    const { data, error } = await supabase
+    // First, try to get an open session
+    const { data: openSession, error: openError } = await supabase
       .from("arena_sessions")
       .select("*")
       .eq("is_open", true)
@@ -1171,44 +1180,64 @@ const Arena = () => {
       .limit(1)
       .maybeSingle();
     
-    if (error) {
-      console.error("Error fetching current session:", error);
-      return;
+    if (openError) {
+      console.error("Error fetching open session:", openError);
     }
     
-    if (data) {
-      setCurrentSession(data);
+    if (openSession) {
+      setCurrentSession(openSession);
       // Check if user has joined
       if (userId) {
         const { data: participant } = await supabase
           .from("arena_participants")
           .select("id")
           .eq("user_id", userId)
-          .eq("session_id", data.id)
+          .eq("session_id", openSession.id)
+          .maybeSingle();
+        setHasJoined(!!participant);
+      }
+      return;
+    }
+    
+    // No open session, get the most recent session (open or closed) to maintain session continuity
+    const { data: lastSession, error: lastError } = await supabase
+      .from("arena_sessions")
+      .select("*")
+      .order("closed_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    
+    if (lastError) {
+      console.error("Error fetching last session:", lastError);
+    }
+    
+    if (lastSession) {
+      // Use the existing session ID to maintain continuity
+      const nextOpen = timerSystem.calculateNextArenaOpenTime(new Date(lastSession.closed_at));
+      const nextClose = timerSystem.calculateArenaCloseTime(nextOpen);
+      const isCurrentlyOpen = timerSystem.isArenaOpen(nextOpen.toISOString(), nextClose.toISOString());
+      
+      setCurrentSession({
+        id: lastSession.id, // Keep the existing session ID!
+        session_number: lastSession.session_number,
+        opened_at: nextOpen.toISOString(),
+        closed_at: nextClose.toISOString(),
+        battle_started_at: null,
+        battle_timer_ends_at: null,
+        is_open: isCurrentlyOpen,
+      });
+      
+      // Check if user has joined (using the existing session ID)
+      if (userId) {
+        const { data: participant } = await supabase
+          .from("arena_participants")
+          .select("id")
+          .eq("user_id", userId)
+          .eq("session_id", lastSession.id)
           .maybeSingle();
         setHasJoined(!!participant);
       }
     } else {
-      // No open session, check for next session
-      const { data: lastSession } = await supabase
-        .from("arena_sessions")
-        .select("*")
-        .order("closed_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      
-      if (lastSession) {
-        const nextOpen = timerSystem.calculateNextArenaOpenTime(new Date(lastSession.closed_at));
-        setCurrentSession({
-          id: "",
-          session_number: 0,
-          opened_at: nextOpen.toISOString(),
-          closed_at: timerSystem.calculateArenaCloseTime(nextOpen).toISOString(),
-          battle_started_at: null,
-          battle_timer_ends_at: null,
-          is_open: false,
-        });
-      } else {
         // No sessions exist - calculate the next open time from now
         const now = new Date();
         const totalCycleMinutes = timerSystem.ARENA_OPEN_DURATION_MINUTES + timerSystem.ARENA_CLOSE_DURATION_MINUTES; // 60 minutes (40 open + 20 closed)
@@ -1321,14 +1350,14 @@ const Arena = () => {
         .single();
       
       if (createError || !newSession) {
-        toast({
-          title: "Error",
+      toast({
+        title: "Error",
           description: "Failed to create Arena session",
-          variant: "destructive",
-        });
-        return;
-      }
-      
+        variant: "destructive",
+      });
+      return;
+    }
+
       sessionId = newSession.id;
       setCurrentSession(newSession);
     }
@@ -1431,11 +1460,21 @@ const Arena = () => {
           setBattleTimer(battleTime);
         }
       } else {
-        // When closed, calculate next open time based on closed_at
+        // When closed, calculate next open time
         let nextOpenTime: Date | null = null;
         const now = new Date();
         
-        if (currentSession.closed_at) {
+        // First, check if opened_at is set and in the future (this is the scheduled open time)
+        if (currentSession.opened_at) {
+          const scheduledOpen = new Date(currentSession.opened_at);
+          if (scheduledOpen > now) {
+            // Use the scheduled open time
+            nextOpenTime = scheduledOpen;
+          }
+        }
+        
+        // If no scheduled time or it's in the past, calculate from closed_at
+        if (!nextOpenTime && currentSession.closed_at) {
           // Start from the closed_at time
           let baseTime = new Date(currentSession.closed_at);
           nextOpenTime = timerSystem.calculateNextArenaOpenTime(baseTime);
@@ -1447,7 +1486,7 @@ const Arena = () => {
             baseTime.setMinutes(baseTime.getMinutes() + totalCycleMinutes);
             nextOpenTime = timerSystem.calculateNextArenaOpenTime(baseTime);
           }
-        } else if (currentSession.opened_at) {
+        } else if (!nextOpenTime && currentSession.opened_at) {
           // Fallback: if no closed_at, use opened_at + close duration + open duration
           const lastOpen = new Date(currentSession.opened_at);
           let nextOpen = new Date(lastOpen);
@@ -1494,7 +1533,27 @@ const Arena = () => {
                 })
                 .eq("id", currentSession.id);
               
-              if (!error) {
+              if (error) {
+                console.error("Error updating session to open:", error);
+                // If update fails, try creating a new session instead
+                const { data: newSession, error: createError } = await supabase
+                  .from("arena_sessions")
+                  .insert({
+                    session_number: nextSessionNumber,
+                    opened_at: openedAt.toISOString(),
+                    closed_at: closedAt.toISOString(),
+                    is_open: true
+                  })
+                  .select()
+                  .single();
+                
+                if (!createError && newSession) {
+                  setCurrentSession(newSession);
+                } else {
+                  console.error("Error creating new session:", createError);
+                  await fetchCurrentSession();
+                }
+              } else {
                 await fetchCurrentSession();
               }
             } else {
@@ -1568,49 +1627,61 @@ const Arena = () => {
   
   // Cooldown Management
   const fetchCooldowns = async (userId: string) => {
-    const [actionData, techniqueData] = await Promise.all([
-      supabase
-        .from("action_cooldowns")
-        .select("*")
-        .eq("user_id", userId)
-        .gt("expires_at", new Date().toISOString()),
-      supabase
-        .from("technique_cooldowns")
-        .select("*")
-        .eq("user_id", userId)
-        .gt("expires_at", new Date().toISOString()),
-    ]);
-    
-    // Always initialize state, even if empty
-    if (actionData.data && actionData.data.length > 0) {
-      const cooldowns: Record<string, string> = {};
-      actionData.data.forEach(cd => {
-        cooldowns[cd.action_type] = cd.expires_at;
-      });
-      setActionCooldowns(cooldowns);
-    } else {
-      // Initialize empty if no cooldowns
-      setActionCooldowns({});
+    try {
+      const [actionData, techniqueData] = await Promise.all([
+        supabase
+          .from("action_cooldowns")
+          .select("*")
+          .eq("user_id", userId)
+          .gt("expires_at", new Date().toISOString()),
+        supabase
+          .from("technique_cooldowns")
+          .select("*")
+          .eq("user_id", userId)
+          .gt("expires_at", new Date().toISOString()),
+      ]);
+      
+      // Always initialize state, even if empty
+      if (actionData.data && actionData.data.length > 0) {
+        const cooldowns: Record<string, string> = {};
+        actionData.data.forEach(cd => {
+          cooldowns[cd.action_type] = cd.expires_at;
+        });
+        setActionCooldowns(cooldowns);
+      } else {
+        // Initialize empty if no cooldowns
+        setActionCooldowns({});
+      }
+      
+      if (techniqueData.data && techniqueData.data.length > 0) {
+        const cooldowns: Record<string, string> = {};
+        techniqueData.data.forEach(cd => {
+          cooldowns[cd.technique_id] = cd.expires_at;
+        });
+        setTechniqueCooldowns(cooldowns);
+      } else {
+        // Initialize empty if no cooldowns
+        setTechniqueCooldowns({});
+      }
+      
+      // Mark cooldowns as loaded ONLY after successful fetch
+      setCooldownsLoaded(true);
+    } catch (error) {
+      console.error("Error fetching cooldowns:", error);
+      // Don't set cooldownsLoaded to true on error - this prevents actions until cooldowns are properly loaded
     }
-    
-    if (techniqueData.data && techniqueData.data.length > 0) {
-      const cooldowns: Record<string, string> = {};
-      techniqueData.data.forEach(cd => {
-        cooldowns[cd.technique_id] = cd.expires_at;
-      });
-      setTechniqueCooldowns(cooldowns);
-    } else {
-      // Initialize empty if no cooldowns
-      setTechniqueCooldowns({});
-    }
-    
-    // Mark cooldowns as loaded
-    setCooldownsLoaded(true);
   };
   
   // Refresh cooldowns periodically to keep them in sync
   useEffect(() => {
-    if (!userId) return;
+    if (!userId) {
+      // Reset cooldowns loaded state when userId is not available
+      setCooldownsLoaded(false);
+      return;
+    }
+    
+    // Reset cooldowns loaded state when userId changes (e.g., on page refresh)
+    setCooldownsLoaded(false);
     
     // Fetch cooldowns immediately
     fetchCooldowns(userId);
@@ -1622,6 +1693,17 @@ const Arena = () => {
     
     return () => clearInterval(interval);
   }, [userId]);
+  
+  // Auto-refresh arena posts every minute to filter out posts older than 5 minutes
+  useEffect(() => {
+    // Initial fetch is already done in the main useEffect
+    // This just refreshes to filter out old posts
+    const interval = setInterval(() => {
+      fetchArenaPosts();
+    }, 60000); // Refresh every minute
+    
+    return () => clearInterval(interval);
+  }, []);
   
   // Battle Feed
   const fetchBattleFeed = async () => {
@@ -1844,7 +1926,7 @@ const Arena = () => {
     await supabase
       .from("action_cooldowns")
       .upsert({
-        user_id: userId,
+      user_id: userId,
         action_type: "attack",
         expires_at: cooldownExpires.toISOString(),
       });
@@ -1947,7 +2029,7 @@ const Arena = () => {
     expiresAt.setMinutes(expiresAt.getMinutes() + duration);
     
     await supabase.from("player_statuses").insert({
-      user_id: userId,
+        user_id: userId,
       status: "K.O",
       applied_by_mastery: 2,
       expires_at: expiresAt.toISOString(),
@@ -2052,7 +2134,7 @@ const Arena = () => {
       user_id: userId,
       action_type: "move_around",
       description: description,
-      zone_id: currentZone,
+        zone_id: currentZone,
     });
     
     const now = new Date();
@@ -2066,10 +2148,10 @@ const Arena = () => {
     
     toast({
       title: "Move Around",
-      description: description,
-    });
+        description: description,
+      });
   };
-  
+
   const handleObserve = async () => {
     if (!userId || !hasJoined) {
       toast({
@@ -2170,7 +2252,7 @@ const Arena = () => {
       .from("profiles")
       .update({ last_action_at: now.toISOString() })
       .eq("id", userId);
-    
+
     // Add to battle feed
     await supabase.from("battle_feed").insert({
       user_id: userId,
@@ -2197,7 +2279,7 @@ const Arena = () => {
     
     // Ensure zones are loaded
     if (zones.length === 0) {
-      toast({
+    toast({
         title: "Loading",
         description: "Zones are still loading. Please wait...",
         variant: "default",
@@ -3529,16 +3611,6 @@ const Arena = () => {
                               <span className="text-xs text-muted-foreground">
                                 {new Date(post.created_at).toLocaleString()}
                               </span>
-                              {isAdmin && (
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => handleDeleteArenaPost(post.id)}
-                                  className="h-6 px-2 text-xs text-destructive hover:text-destructive"
-                                >
-                                  Delete
-                                </Button>
-                              )}
                             </div>
                             <div className="text-sm text-foreground">
                               {(() => {
