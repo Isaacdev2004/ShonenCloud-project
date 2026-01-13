@@ -1308,7 +1308,6 @@ const Arena = () => {
             is_open: isCurrentlyOpen,
           });
         }
-      }
     }
   };
   
