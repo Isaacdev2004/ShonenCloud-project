@@ -2517,7 +2517,7 @@ const Arena = () => {
     const cooldownExpires = timerSystem.calculateCooldownExpiration(5);
     
     // Try update first (most common case - cooldown already exists)
-    const { data: updateData, error: updateError } = await supabase
+    const { data: cooldownUpdateData, error: cooldownUpdateError } = await supabase
       .from("action_cooldowns")
       .update({ expires_at: cooldownExpires.toISOString() })
       .eq("user_id", userId)
@@ -2525,8 +2525,8 @@ const Arena = () => {
       .select();
     
     // If update didn't affect any rows (no existing record), insert new one
-    if (!updateData || updateData.length === 0) {
-      const { error: insertError } = await supabase
+    if (!cooldownUpdateData || cooldownUpdateData.length === 0) {
+      const { error: cooldownInsertError } = await supabase
         .from("action_cooldowns")
         .insert({
           user_id: userId,
@@ -2534,11 +2534,11 @@ const Arena = () => {
           expires_at: cooldownExpires.toISOString(),
         });
       
-      if (insertError && insertError.code !== '23505') { // Ignore duplicate key errors (race condition)
-        console.error("Error inserting change_zone cooldown:", insertError);
+      if (cooldownInsertError && cooldownInsertError.code !== '23505') { // Ignore duplicate key errors (race condition)
+        console.error("Error inserting change_zone cooldown:", cooldownInsertError);
       }
-    } else if (updateError) {
-      console.error("Error updating change_zone cooldown:", updateError);
+    } else if (cooldownUpdateError) {
+      console.error("Error updating change_zone cooldown:", cooldownUpdateError);
     }
     
     // Update state immediately
