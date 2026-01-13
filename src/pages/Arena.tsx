@@ -1419,11 +1419,11 @@ const Arena = () => {
           
           if (!error) {
             await fetchCurrentSession();
+            return;
           } else {
             console.error("Error opening arena session:", error);
-            // Fall through to secondary mechanism below
+            // Fall through to secondary mechanism below - DON'T return here!
           }
-          return;
         } else if (!actualIsOpen && currentSession.is_open) {
           // Should be closed but marked as open - close it
           const closedAt = new Date();
@@ -1512,7 +1512,8 @@ const Arena = () => {
           
           // Check if arena should open now (SECONDARY mechanism - backup)
           // This handles cases where primary mechanism might have failed or session has no ID
-          if (timeUntilOpen <= 0) {
+          // Also check actualIsOpen to ensure we're not opening when we shouldn't
+          if (timeUntilOpen <= 0 || actualIsOpen) {
             // Double-check: if arena is already open according to time, primary mechanism should handle it
             // But proceed anyway as backup (primary mechanism might have failed or session has no ID)
             const openedAt = new Date();
@@ -1649,15 +1650,18 @@ const Arena = () => {
       ]);
       
       // Always initialize state, even if empty
+      // Merge with existing state to preserve any cooldowns that might have been set locally
       if (actionData.data && actionData.data.length > 0) {
         const cooldowns: Record<string, string> = {};
         actionData.data.forEach(cd => {
           cooldowns[cd.action_type] = cd.expires_at;
         });
-        setActionCooldowns(cooldowns);
+        // Merge with existing state to preserve any locally set cooldowns
+        setActionCooldowns(prev => ({ ...prev, ...cooldowns }));
       } else {
-        // Initialize empty if no cooldowns
-        setActionCooldowns({});
+        // Don't reset to empty - preserve existing state if no cooldowns found
+        // Only initialize empty on first load (when prev is undefined)
+        setActionCooldowns(prev => prev || {});
       }
       
       if (techniqueData.data && techniqueData.data.length > 0) {
@@ -2314,9 +2318,25 @@ const Arena = () => {
       return;
     }
     
-    // Check cooldown in state first
-    if (actionCooldowns["change_zone"] && !timerSystem.isCooldownExpired(actionCooldowns["change_zone"])) {
-      const remaining = timerSystem.getRemainingCooldown(actionCooldowns["change_zone"]);
+    // ALWAYS check database first to prevent refresh exploit
+    // This ensures we have the latest cooldown state from the database
+    const { data: cooldownData, error: cooldownError } = await supabase
+      .from("action_cooldowns")
+      .select("expires_at")
+      .eq("user_id", userId)
+      .eq("action_type", "change_zone")
+      .gt("expires_at", new Date().toISOString())
+      .maybeSingle();
+
+    if (cooldownError) {
+      console.error("Error checking cooldown:", cooldownError);
+    }
+
+    // If cooldown exists in database, use it (even if state says otherwise)
+    if (cooldownData && !timerSystem.isCooldownExpired(cooldownData.expires_at)) {
+      const remaining = timerSystem.getRemainingCooldown(cooldownData.expires_at);
+      // Update state with database value to keep it in sync
+      setActionCooldowns(prev => ({ ...prev, change_zone: cooldownData.expires_at }));
       toast({
         title: "On Cooldown",
         description: `Change Zone is on cooldown. ${timerSystem.formatTime(remaining)} remaining.`,
@@ -2325,19 +2345,9 @@ const Arena = () => {
       return;
     }
 
-    // Double-check cooldown in database (prevents refresh exploit)
-    const { data: cooldownData } = await supabase
-      .from("action_cooldowns")
-      .select("expires_at")
-      .eq("user_id", userId)
-      .eq("action_type", "change_zone")
-      .gt("expires_at", new Date().toISOString())
-      .maybeSingle();
-
-    if (cooldownData && !timerSystem.isCooldownExpired(cooldownData.expires_at)) {
-      const remaining = timerSystem.getRemainingCooldown(cooldownData.expires_at);
-      // Update state with database value
-      setActionCooldowns(prev => ({ ...prev, change_zone: cooldownData.expires_at }));
+    // Also check state as a quick check (but database is authoritative)
+    if (actionCooldowns["change_zone"] && !timerSystem.isCooldownExpired(actionCooldowns["change_zone"])) {
+      const remaining = timerSystem.getRemainingCooldown(actionCooldowns["change_zone"]);
       toast({
         title: "On Cooldown",
         description: `Change Zone is on cooldown. ${timerSystem.formatTime(remaining)} remaining.`,
