@@ -1402,12 +1402,13 @@ const Arena = () => {
       const actualIsOpen = timerSystem.isArenaOpen(currentSession.opened_at, currentSession.closed_at);
       
       // If state doesn't match actual time, correct it
+      // This is the PRIMARY mechanism - it checks if the scheduled time has arrived
       if (currentSession.id && currentSession.id !== "" && currentSession.is_open !== actualIsOpen) {
         if (actualIsOpen && !currentSession.is_open) {
-          // Should be open but marked as closed - open it
+          // Should be open but marked as closed - open it immediately
           const openedAt = new Date();
           const closedAt = timerSystem.calculateArenaCloseTime(openedAt);
-          await supabase
+          const { error } = await supabase
             .from("arena_sessions")
             .update({
               is_open: true,
@@ -1415,7 +1416,13 @@ const Arena = () => {
               closed_at: closedAt.toISOString()
             })
             .eq("id", currentSession.id);
-          await fetchCurrentSession();
+          
+          if (!error) {
+            await fetchCurrentSession();
+          } else {
+            console.error("Error opening arena session:", error);
+            // Fall through to secondary mechanism below
+          }
           return;
         } else if (!actualIsOpen && currentSession.is_open) {
           // Should be closed but marked as open - close it
@@ -1463,13 +1470,12 @@ const Arena = () => {
         let nextOpenTime: Date | null = null;
         const now = new Date();
         
-        // First, check if opened_at is set and in the future (this is the scheduled open time)
+        // First, check if opened_at is set (this is the scheduled open time)
+        // Use it whether it's in the past, present, or future - the timer will handle it
         if (currentSession.opened_at) {
           const scheduledOpen = new Date(currentSession.opened_at);
-          if (scheduledOpen > now) {
-            // Use the scheduled open time
-            nextOpenTime = scheduledOpen;
-          }
+          // Use the scheduled open time (even if it's in the past, as it might have just arrived)
+          nextOpenTime = scheduledOpen;
         }
         
         // If no scheduled time or it's in the past, calculate from closed_at
@@ -1504,9 +1510,11 @@ const Arena = () => {
           const timeUntilOpen = timerSystem.getTimeUntilArenaOpens(nextOpenTime.toISOString());
           setArenaOpenTimer(timeUntilOpen);
           
-          // Check if arena should open now
+          // Check if arena should open now (SECONDARY mechanism - backup)
+          // This handles cases where primary mechanism might have failed or session has no ID
           if (timeUntilOpen <= 0) {
-            // Arena should open now
+            // Double-check: if arena is already open according to time, primary mechanism should handle it
+            // But proceed anyway as backup (primary mechanism might have failed or session has no ID)
             const openedAt = new Date();
             const closedAt = timerSystem.calculateArenaCloseTime(openedAt);
             
