@@ -42,6 +42,19 @@ Deno.serve(async (req) => {
       console.log('Successfully deleted old arena posts')
     }
 
+    // Delete battle feed entries older than 5 minutes
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString()
+    const { error: battleFeedError } = await supabaseClient
+      .from('battle_feed')
+      .delete()
+      .lt('created_at', fiveMinutesAgo)
+
+    if (battleFeedError) {
+      console.error('Error deleting old battle feed entries:', battleFeedError)
+    } else {
+      console.log('Successfully deleted old battle feed entries')
+    }
+
     return new Response(
       JSON.stringify({ success: true, message: 'Cleanup completed' }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }

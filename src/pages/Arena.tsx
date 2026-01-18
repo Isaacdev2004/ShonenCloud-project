@@ -92,12 +92,18 @@ interface ArenaPost {
   zone_id: string;
   technique_name: string;
   description: string;
+  action_type?: string;
+  target_user_id?: string | null;
   created_at: string;
   profiles: {
     username: string;
     profile_picture_url: string;
     discipline: string;
   };
+  target_profile?: {
+    username: string;
+    profile_picture_url: string;
+  } | null;
 }
 
 // New Arena System Interfaces
@@ -129,8 +135,13 @@ interface BattleFeedEntry {
   technique_description: string | null;
   description: string;
   zone_id: string | null;
+  target_user_id: string | null;
   created_at: string;
   profiles?: {
+    username: string;
+    profile_picture_url: string;
+  };
+  target_profile?: {
     username: string;
     profile_picture_url: string;
   };
@@ -185,6 +196,7 @@ const Arena = () => {
   const [techniqueCooldowns, setTechniqueCooldowns] = useState<Record<string, string>>({});
   const [cooldownsLoaded, setCooldownsLoaded] = useState(false);
   const [battleFeed, setBattleFeed] = useState<BattleFeedEntry[]>([]);
+  const [playerStatusesMap, setPlayerStatusesMap] = useState<Record<string, PlayerStatus[]>>({});
   const [vanishingToasts, setVanishingToasts] = useState<VanishingToast[]>([]);
   const [selectedZoneTarget, setSelectedZoneTarget] = useState<string | null>(null);
   const [showPlayerPopup, setShowPlayerPopup] = useState<string | null>(null);
@@ -323,25 +335,60 @@ const Arena = () => {
       setMaxHP(data.max_hp ?? statsSystem.calculateMaxHP(data.level || 1));
       
       // Check and apply temporary ATK boosts from red_orb_effects
-      const { data: redOrbData } = await supabase
+      const maxATKValue = data.max_atk ?? statsSystem.calculateMaxATK(data.level || 1);
+      
+      // First, check for active boost
+      const { data: redOrbData, error: redOrbError } = await supabase
         .from("red_orb_effects")
         .select("atk_boost, expires_at")
         .eq("user_id", id)
         .gt("expires_at", new Date().toISOString())
         .maybeSingle();
       
-      let baseATK = data.current_atk ?? data.max_atk ?? 20;
+      // Also check for any expired boost to determine if we should reset
+      const { data: expiredOrbData } = await supabase
+        .from("red_orb_effects")
+        .select("expires_at")
+        .eq("user_id", id)
+        .lte("expires_at", new Date().toISOString())
+        .order("expires_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      
+      let baseATK = data.current_atk ?? maxATKValue;
+      
       if (redOrbData && redOrbData.atk_boost) {
-        baseATK = (data.max_atk ?? statsSystem.calculateMaxATK(data.level || 1)) + redOrbData.atk_boost;
-      } else {
-        // Remove expired ATK boost - reset to max_atk
-        baseATK = data.max_atk ?? statsSystem.calculateMaxATK(data.level || 1);
-        if (data.current_atk && data.current_atk > baseATK) {
-          // Update database to remove expired boost
+        // Active boost exists - calculate from max_atk + boost
+        const calculatedATK = maxATKValue + redOrbData.atk_boost;
+        baseATK = calculatedATK;
+        
+        // Update database to ensure current_atk matches the boost
+        if (data.current_atk !== calculatedATK) {
           await supabase
             .from("profiles")
-            .update({ current_atk: baseATK })
+            .update({ current_atk: calculatedATK })
             .eq("id", id);
+        }
+      } else {
+        // No active boost found in red_orb_effects
+        if (data.current_atk && data.current_atk > maxATKValue) {
+          // current_atk is boosted but no active red_orb_effects found
+          // If there's an expired record, the boost has expired - reset to max_atk
+          if (expiredOrbData) {
+            // Boost expired - reset to max_atk
+            baseATK = maxATKValue;
+            await supabase
+              .from("profiles")
+              .update({ current_atk: maxATKValue })
+              .eq("id", id);
+          } else {
+            // No expired record found - could be network error or record missing
+            // Preserve the boosted value to prevent loss on refresh
+            baseATK = data.current_atk;
+          }
+        } else {
+          // Use current_atk if it exists and is valid (not boosted)
+          baseATK = data.current_atk ?? maxATKValue;
         }
       }
       setCurrentATK(baseATK);
@@ -414,6 +461,33 @@ const Arena = () => {
       }));
 
       setPlayerPositions(combined);
+      
+      // Fetch statuses for all players
+      if (userIds.length > 0) {
+        const { data: allStatuses, error: statusError } = await supabase
+          .from("player_statuses")
+          .select("*")
+          .in("user_id", userIds)
+          .gt("expires_at", new Date().toISOString());
+        
+        if (statusError) {
+          console.error("Error fetching player statuses:", statusError);
+        } else if (allStatuses) {
+          const statusMap: Record<string, PlayerStatus[]> = {};
+          allStatuses.forEach((status: any) => {
+            if (!statusMap[status.user_id]) {
+              statusMap[status.user_id] = [];
+            }
+            statusMap[status.user_id].push(status as PlayerStatus);
+          });
+          setPlayerStatusesMap(statusMap);
+        } else {
+          // Clear statuses if no data
+          setPlayerStatusesMap({});
+        }
+      } else {
+        setPlayerStatusesMap({});
+      }
     }
   };
 
@@ -990,7 +1064,7 @@ const Arena = () => {
     const [battleFeedData, arenaPostsData] = await Promise.all([
       supabase
         .from("battle_feed")
-        .select(`id, user_id, zone_id, technique_name, description, created_at, action_type`)
+        .select(`id, user_id, zone_id, technique_name, description, created_at, action_type, target_user_id`)
         .order("created_at", { ascending: false })
         .limit(25),
       supabase
@@ -1031,11 +1105,13 @@ const Arena = () => {
     const limitedPosts = recentPosts.slice(0, 50);
 
     const userIds = Array.from(new Set(limitedPosts.map((post) => post.user_id)));
+    const targetUserIds = Array.from(new Set(limitedPosts.map((post) => post.target_user_id).filter(Boolean)));
+    const allUserIds = Array.from(new Set([...userIds, ...targetUserIds]));
 
     const { data: profilesData, error: profilesError } = await supabase
       .from("profiles")
       .select("id, username, profile_picture_url, discipline")
-      .in("id", userIds);
+      .in("id", allUserIds);
 
     if (profilesError) {
       console.error("Error fetching profiles for arena posts:", profilesError);
@@ -1053,6 +1129,7 @@ const Arena = () => {
         profile_picture_url: "",
         discipline: "",
       },
+      target_profile: post.target_user_id ? (profileMap.get(post.target_user_id) || null) : null,
     }));
 
     setArenaPosts(postsWithProfiles as any);
@@ -1600,19 +1677,42 @@ const Arena = () => {
   
   // Status Management
   const fetchPlayerStatuses = async (userId: string) => {
-    const { data, error } = await supabase
-      .from("player_statuses")
-      .select("*")
-      .eq("user_id", userId)
-      .gt("expires_at", new Date().toISOString());
-    
-    if (error) {
-      console.error("Error fetching player statuses:", error);
-      return;
-    }
-    
-    if (data) {
-      setPlayerStatuses(data as PlayerStatus[]);
+    try {
+      const { data, error } = await supabase
+        .from("player_statuses")
+        .select("*")
+        .eq("user_id", userId)
+        .gt("expires_at", new Date().toISOString());
+      
+      if (error) {
+        // Only log non-network errors
+        const errorMsg = error.message?.toLowerCase() || '';
+        const isNetworkError = errorMsg.includes('fetch') || 
+                               errorMsg.includes('network') ||
+                               errorMsg.includes('failed') ||
+                               errorMsg.includes('timeout');
+        if (!isNetworkError) {
+          console.error("Error fetching player statuses:", error);
+        }
+        return;
+      }
+      
+      if (data) {
+        setPlayerStatuses(data as PlayerStatus[]);
+      } else {
+        // If no data, set empty array to ensure UI updates
+        setPlayerStatuses([]);
+      }
+    } catch (error: any) {
+      // Suppress network errors
+      const errorMsg = error?.message?.toLowerCase() || '';
+      const isNetworkError = errorMsg.includes('fetch') || 
+                             errorMsg.includes('network') ||
+                             errorMsg.includes('err_name_not_resolved') ||
+                             errorMsg.includes('err_network_changed');
+      if (!isNetworkError) {
+        console.error("Error fetching player statuses:", error);
+      }
     }
   };
   
@@ -1766,22 +1866,63 @@ const Arena = () => {
     return () => clearInterval(interval);
   }, [userId]);
   
-  // Auto-refresh arena posts every minute to filter out posts older than 5 minutes
+  // Auto-refresh battle feed every minute and filter out entries older than 5 minutes
   useEffect(() => {
-    // Initial fetch is already done in the main useEffect
-    // This just refreshes to filter out old posts
-    const interval = setInterval(() => {
-      fetchArenaPosts();
-    }, 60000); // Refresh every minute
+    if (!userId) return;
     
-    return () => clearInterval(interval);
-  }, []);
+    const refreshAndFilter = async () => {
+      // Fetch fresh battle feed (already filters by 5 minutes in the query)
+      await fetchBattleFeed();
+      
+      // Additional safety filter: remove any entries older than 5 minutes from state
+      const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+      setBattleFeed(prev => prev.filter(entry => entry.created_at && new Date(entry.created_at) > fiveMinutesAgo));
+    };
+    
+    // Cleanup function to delete old battle feed entries from database
+    const cleanupOldEntries = async () => {
+      try {
+        const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+        // Delete old entries directly from database
+        await supabase
+          .from("battle_feed")
+          .delete()
+          .lt("created_at", fiveMinutesAgo);
+        
+        // Also call the cleanup function as a backup
+        const { data } = await supabase.functions.invoke('cleanup-old-messages');
+        if (data) {
+          console.log('Cleanup function called successfully');
+        }
+      } catch (error) {
+        console.error('Error cleaning up old battle feed entries:', error);
+      }
+    };
+    
+    // Initial refresh
+    refreshAndFilter();
+    
+    // Refresh every minute
+    const refreshInterval = setInterval(refreshAndFilter, 60000);
+    
+    // Cleanup old entries every 5 minutes
+    const cleanupInterval = setInterval(cleanupOldEntries, 5 * 60 * 1000);
+    
+    return () => {
+      clearInterval(refreshInterval);
+      clearInterval(cleanupInterval);
+    };
+  }, [userId]);
   
   // Battle Feed
   const fetchBattleFeed = async () => {
+    // Only fetch entries from the last 5 minutes
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    
     const { data, error } = await supabase
       .from("battle_feed")
       .select("*")
+      .gt("created_at", fiveMinutesAgo)
       .order("created_at", { ascending: false })
       .limit(50);
     
@@ -1790,26 +1931,38 @@ const Arena = () => {
       return;
     }
     
-    if (data) {
+    if (data && data.length > 0) {
       // Fetch profiles separately since user_id references auth.users, not profiles
-      const userIds = Array.from(new Set(data.map((entry: any) => entry.user_id)));
-      const { data: profilesData } = await supabase
-        .from("profiles")
-        .select("id, username, profile_picture_url")
-        .in("id", userIds);
+      const userIds = Array.from(new Set(data.map((entry: any) => entry.user_id).filter(Boolean)));
+      const targetUserIds = Array.from(new Set(data.map((entry: any) => entry.target_user_id).filter(Boolean)));
+      const allUserIds = Array.from(new Set([...userIds, ...targetUserIds]));
       
-      // Map profiles to entries
-      const profileMap = (profilesData || []).reduce((acc: any, profile: any) => {
-        acc[profile.id] = profile;
-        return acc;
-      }, {});
+      let profileMap: Record<string, any> = {};
+      if (allUserIds.length > 0) {
+        const { data: profilesData, error: profileError } = await supabase
+          .from("profiles")
+          .select("id, username, profile_picture_url")
+          .in("id", allUserIds);
+        
+        if (profileError) {
+          console.error("Error fetching profiles for battle feed:", profileError);
+        } else if (profilesData) {
+          profileMap = (profilesData || []).reduce((acc: any, profile: any) => {
+            acc[profile.id] = profile;
+            return acc;
+          }, {});
+        }
+      }
       
       const entriesWithProfiles = data.map((entry: any) => ({
         ...entry,
-        profiles: profileMap[entry.user_id] || { username: "Unknown", profile_picture_url: "" }
+        profiles: profileMap[entry.user_id] || { username: "Unknown", profile_picture_url: "" },
+        target_profile: entry.target_user_id ? (profileMap[entry.target_user_id] || null) : null
       }));
       
       setBattleFeed(entriesWithProfiles as any);
+    } else {
+      setBattleFeed([]);
     }
   };
   
@@ -1840,8 +1993,24 @@ const Arena = () => {
             newEntry.profiles = profile;
           }
           
-          // Add to battle feed
-          setBattleFeed(prev => [newEntry, ...prev.slice(0, 49)]);
+          // Fetch target profile if attack action
+          if (newEntry.action_type === "attack" && newEntry.target_user_id) {
+            const { data: targetProfile } = await supabase
+              .from("profiles")
+              .select("username, profile_picture_url")
+              .eq("id", newEntry.target_user_id)
+              .single();
+            
+            if (targetProfile) {
+              newEntry.target_profile = targetProfile;
+            }
+          }
+          
+          // Only add to battle feed if entry is within 5 minutes (auto-delete old entries)
+          const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+          if (newEntry.created_at && new Date(newEntry.created_at) > fiveMinutesAgo) {
+            setBattleFeed(prev => [newEntry, ...prev.slice(0, 49)]);
+          }
           
           // If it's not from current user, show vanishing toast
           if (newEntry.user_id !== userId) {
@@ -1878,8 +2047,53 @@ const Arena = () => {
       fetchPlayerStatuses(userId);
       fetchCooldowns(userId);
       fetchBattleFeed();
+      
+      // Refresh player statuses periodically
+      const statusInterval = setInterval(() => {
+        fetchPlayerStatuses(userId);
+      }, 5000); // Refresh every 5 seconds
+      
+      return () => clearInterval(statusInterval);
     }
   }, [userId]);
+  
+  // Refresh player statuses map for all players periodically
+  useEffect(() => {
+    if (playerPositions.length === 0) return;
+    
+    const refreshAllStatuses = () => {
+      const userIds = playerPositions.map(p => p.user_id);
+      if (userIds.length > 0) {
+        supabase
+          .from("player_statuses")
+          .select("*")
+          .in("user_id", userIds)
+          .gt("expires_at", new Date().toISOString())
+          .then(({ data: allStatuses, error: statusError }) => {
+            if (!statusError && allStatuses) {
+              const statusMap: Record<string, PlayerStatus[]> = {};
+              allStatuses.forEach((status: any) => {
+                if (!statusMap[status.user_id]) {
+                  statusMap[status.user_id] = [];
+                }
+                statusMap[status.user_id].push(status as PlayerStatus);
+              });
+              setPlayerStatusesMap(statusMap);
+            } else if (!statusError) {
+              setPlayerStatusesMap({});
+            }
+          });
+      }
+    };
+    
+    // Initial fetch
+    refreshAllStatuses();
+    
+    // Refresh every 5 seconds
+    const allStatusesInterval = setInterval(refreshAllStatuses, 5000);
+    
+    return () => clearInterval(allStatusesInterval);
+  }, [playerPositions]);
   
   // Action Handlers
   const handleAttack = async () => {
@@ -1902,9 +2116,36 @@ const Arena = () => {
       return;
     }
 
-    // Check cooldown in state first
-    if (actionCooldowns["attack"] && !timerSystem.isCooldownExpired(actionCooldowns["attack"])) {
-      const remaining = timerSystem.getRemainingCooldown(actionCooldowns["attack"]);
+    // ALWAYS check database first to prevent refresh exploit
+    // This ensures we have the latest cooldown state from the database
+    const { data: cooldownData, error: cooldownError } = await supabase
+      .from("action_cooldowns")
+      .select("expires_at")
+      .eq("user_id", userId)
+      .eq("action_type", "attack")
+      .gt("expires_at", new Date().toISOString())
+      .maybeSingle();
+
+    if (cooldownError) {
+      // Only log non-network errors (network errors are expected during connectivity issues)
+      const errorMsg = cooldownError.message?.toLowerCase() || '';
+      const isNetworkError = errorMsg.includes('fetch') || 
+                             errorMsg.includes('network') ||
+                             errorMsg.includes('failed') ||
+                             errorMsg.includes('timeout') ||
+                             cooldownError.code === 'PGRST116' ||
+                             cooldownError.code === 'PGRST301';
+      if (!isNetworkError) {
+        console.error("Error checking cooldown:", cooldownError);
+      }
+      // On network error, fall back to state check (better than blocking user)
+    }
+
+    // If cooldown exists in database, use it (even if state says otherwise)
+    if (cooldownData && !timerSystem.isCooldownExpired(cooldownData.expires_at)) {
+      const remaining = timerSystem.getRemainingCooldown(cooldownData.expires_at);
+      // Update state with database value to keep it in sync
+      setActionCooldowns(prev => ({ ...prev, attack: cooldownData.expires_at }));
       toast({
         title: "On Cooldown",
         description: `Attack is on cooldown. ${timerSystem.formatTime(remaining)} remaining.`,
@@ -1913,19 +2154,9 @@ const Arena = () => {
       return;
     }
 
-    // Double-check cooldown in database (prevents refresh exploit)
-    const { data: cooldownData } = await supabase
-      .from("action_cooldowns")
-      .select("expires_at")
-      .eq("user_id", userId)
-      .eq("action_type", "attack")
-      .gt("expires_at", new Date().toISOString())
-      .maybeSingle();
-
-    if (cooldownData && !timerSystem.isCooldownExpired(cooldownData.expires_at)) {
-      const remaining = timerSystem.getRemainingCooldown(cooldownData.expires_at);
-      // Update state with database value
-      setActionCooldowns(prev => ({ ...prev, attack: cooldownData.expires_at }));
+    // Also check state as a quick check (but database is authoritative)
+    if (actionCooldowns["attack"] && !timerSystem.isCooldownExpired(actionCooldowns["attack"])) {
+      const remaining = timerSystem.getRemainingCooldown(actionCooldowns["attack"]);
       toast({
         title: "On Cooldown",
         description: `Attack is on cooldown. ${timerSystem.formatTime(remaining)} remaining.`,
@@ -1993,17 +2224,40 @@ const Arena = () => {
       .update({ mastery: newMastery })
       .eq("id", userId);
     
-    // Set cooldown
+    // Set cooldown - use update-then-insert pattern to avoid 409 conflicts
     const cooldownExpires = timerSystem.calculateCooldownExpiration(1);
-    await supabase
+    
+    // Try update first (most common case - cooldown already exists)
+    const { data: cooldownUpdateData, error: cooldownUpdateError } = await supabase
       .from("action_cooldowns")
-      .upsert({
-      user_id: userId,
-        action_type: "attack",
+      .update({
         expires_at: cooldownExpires.toISOString(),
-      });
+      })
+      .eq("user_id", userId)
+      .eq("action_type", "attack")
+      .select();
+    
+    // If update didn't affect any rows (no existing record), insert new one
+    if (!cooldownUpdateData || cooldownUpdateData.length === 0) {
+      const { error: cooldownInsertError } = await supabase
+        .from("action_cooldowns")
+        .insert({
+          user_id: userId,
+          action_type: "attack",
+          expires_at: cooldownExpires.toISOString(),
+        });
+      
+      if (cooldownInsertError && cooldownInsertError.code !== '23505') { // Ignore duplicate key errors (race condition)
+        console.error("Error inserting attack cooldown:", cooldownInsertError);
+      }
+    } else if (cooldownUpdateError) {
+      console.error("Error updating attack cooldown:", cooldownUpdateError);
+    }
     
     setActionCooldowns(prev => ({ ...prev, attack: cooldownExpires.toISOString() }));
+    
+    // Refresh cooldowns from database to ensure sync
+    await fetchCooldowns(userId);
     const now = new Date();
     setLastActionTime(now);
     
@@ -2016,12 +2270,50 @@ const Arena = () => {
       })
       .eq("id", userId);
     
-    // Add to battle feed
+    // Add to battle feed with target info
+    let battleFeedDescription = "";
+    if (selectedZoneTarget) {
+      const zoneIndex = zones.findIndex((z) => z.id === selectedZoneTarget);
+      const zoneName = zoneIndex !== -1 ? ZONE_IMAGE_NAMES[zoneIndex % ZONE_IMAGE_NAMES.length] : zones.find((z) => z.id === selectedZoneTarget)?.name || "zone";
+      battleFeedDescription = `Attacked ${zoneName} for ${damage} damage`;
+    } else if (currentTarget) {
+      // Always fetch target's profile for username and picture
+      // Try to get from playerPositions first (faster), then fallback to database
+      let targetUsername = null;
+      const targetPlayer = playerPositions.find(p => p.user_id === currentTarget);
+      if (targetPlayer && targetPlayer.profiles) {
+        targetUsername = targetPlayer.profiles.username;
+      } else {
+        // Fetch from database
+        const { data: targetProfile } = await supabase
+          .from("profiles")
+          .select("username, profile_picture_url")
+          .eq("id", currentTarget)
+          .single();
+        
+        if (targetProfile) {
+          targetUsername = targetProfile.username;
+        }
+      }
+      
+      // Always use username if available, otherwise use a fallback
+      if (targetUsername) {
+        battleFeedDescription = `Attacked ${targetUsername} for ${damage} damage`;
+      } else {
+        // Last resort: use target_user_id to let UI display it properly
+        battleFeedDescription = `Attacked target for ${damage} damage`;
+      }
+    } else {
+      // If no target, this shouldn't happen for attacks, but handle gracefully
+      battleFeedDescription = `Attacked for ${damage} damage`;
+    }
+    
     await supabase.from("battle_feed").insert({
       user_id: userId,
       action_type: "attack",
-      description: `Attacked ${selectedZoneTarget ? "zone" : "target"} for ${damage} damage`,
+      description: battleFeedDescription,
       zone_id: currentZone,
+      target_user_id: currentTarget || null,
     });
     
     toast({
@@ -2133,16 +2425,40 @@ const Arena = () => {
       });
       return;
     }
-    
-    // Check action limit
-    if (lastActionTime && new Date().getTime() - lastActionTime.getTime() < 60000) {
+
+    // Block action until cooldowns are loaded
+    if (!cooldownsLoaded) {
       toast({
-        title: "Action Limit",
-        description: "You can only use 1 action per minute",
+        title: "Loading",
+        description: "Please wait while cooldowns are being loaded...",
         variant: "destructive",
       });
       return;
     }
+    
+    // Check action limit - ALWAYS check database first to prevent refresh exploit
+    const { data: profileData } = await supabase
+      .from("profiles")
+      .select("last_action_at")
+      .eq("id", userId)
+      .single();
+    
+    if (profileData?.last_action_at) {
+      const lastActionTime = new Date(profileData.last_action_at);
+      const timeSinceLastAction = new Date().getTime() - lastActionTime.getTime();
+      if (timeSinceLastAction < 60000) {
+        const remaining = Math.ceil((60000 - timeSinceLastAction) / 1000);
+        toast({
+          title: "Action Limit",
+          description: `You can only use 1 action per minute. ${remaining}s remaining.`,
+          variant: "destructive",
+        });
+        return;
+      }
+    }
+    
+    // Note: We only check database for action limit, not local state
+    // This ensures consistency across page refreshes
     
     // Get random result
     const result = getRandomMoveAroundResult();
@@ -2182,11 +2498,32 @@ const Arena = () => {
       const expiresAt = new Date();
       expiresAt.setMinutes(expiresAt.getMinutes() + (result.effect.duration || 5));
       
-      await supabase.from("red_orb_effects").upsert({
-      user_id: userId,
-        atk_boost: boost,
-        expires_at: expiresAt.toISOString(),
-      });
+      // Try update first (most common case - effect already exists)
+      const { data: orbUpdateData, error: orbUpdateError } = await supabase
+        .from("red_orb_effects")
+        .update({
+          atk_boost: boost,
+          expires_at: expiresAt.toISOString(),
+        })
+        .eq("user_id", userId)
+        .select();
+      
+      // If update didn't affect any rows (no existing record), insert new one
+      if (!orbUpdateData || orbUpdateData.length === 0) {
+        const { error: orbInsertError } = await supabase
+          .from("red_orb_effects")
+          .insert({
+            user_id: userId,
+            atk_boost: boost,
+            expires_at: expiresAt.toISOString(),
+          });
+        
+        if (orbInsertError && orbInsertError.code !== '23505') { // Ignore duplicate key errors (race condition)
+          console.error("Error inserting red_orb_effect:", orbInsertError);
+        }
+      } else if (orbUpdateError) {
+        console.error("Error updating red_orb_effect:", orbUpdateError);
+      }
       
       const newATK = currentATK + boost;
       setCurrentATK(newATK);
@@ -2210,9 +2547,8 @@ const Arena = () => {
     });
     
     const now = new Date();
-    setLastActionTime(now);
     
-    // Update last_action_at
+    // Update last_action_at in database
     await supabase
       .from("profiles")
       .update({ last_action_at: now.toISOString() })
@@ -2254,9 +2590,36 @@ const Arena = () => {
       return;
     }
     
-    // Check cooldown in state first
-    if (actionCooldowns["observe"] && !timerSystem.isCooldownExpired(actionCooldowns["observe"])) {
-      const remaining = timerSystem.getRemainingCooldown(actionCooldowns["observe"]);
+    // ALWAYS check database first to prevent refresh exploit
+    // This ensures we have the latest cooldown state from the database
+    const { data: cooldownData, error: cooldownError } = await supabase
+      .from("action_cooldowns")
+      .select("expires_at")
+      .eq("user_id", userId)
+      .eq("action_type", "observe")
+      .gt("expires_at", new Date().toISOString())
+      .maybeSingle();
+
+    if (cooldownError) {
+      // Only log non-network errors (network errors are expected during connectivity issues)
+      const errorMsg = cooldownError.message?.toLowerCase() || '';
+      const isNetworkError = errorMsg.includes('fetch') || 
+                             errorMsg.includes('network') ||
+                             errorMsg.includes('failed') ||
+                             errorMsg.includes('timeout') ||
+                             cooldownError.code === 'PGRST116' ||
+                             cooldownError.code === 'PGRST301';
+      if (!isNetworkError) {
+        console.error("Error checking cooldown:", cooldownError);
+      }
+      // On network error, fall back to state check (better than blocking user)
+    }
+
+    // If cooldown exists in database, use it (even if state says otherwise)
+    if (cooldownData && !timerSystem.isCooldownExpired(cooldownData.expires_at)) {
+      const remaining = timerSystem.getRemainingCooldown(cooldownData.expires_at);
+      // Update state with database value to keep it in sync
+      setActionCooldowns(prev => ({ ...prev, observe: cooldownData.expires_at }));
       toast({
         title: "On Cooldown",
         description: `Observe is on cooldown. ${timerSystem.formatTime(remaining)} remaining.`,
@@ -2265,19 +2628,9 @@ const Arena = () => {
       return;
     }
 
-    // Double-check cooldown in database (prevents refresh exploit)
-    const { data: cooldownData } = await supabase
-      .from("action_cooldowns")
-      .select("expires_at")
-      .eq("user_id", userId)
-      .eq("action_type", "observe")
-      .gt("expires_at", new Date().toISOString())
-      .maybeSingle();
-
-    if (cooldownData && !timerSystem.isCooldownExpired(cooldownData.expires_at)) {
-      const remaining = timerSystem.getRemainingCooldown(cooldownData.expires_at);
-      // Update state with database value
-      setActionCooldowns(prev => ({ ...prev, observe: cooldownData.expires_at }));
+    // Also check state as a quick check (but database is authoritative)
+    if (actionCooldowns["observe"] && !timerSystem.isCooldownExpired(actionCooldowns["observe"])) {
+      const remaining = timerSystem.getRemainingCooldown(actionCooldowns["observe"]);
       toast({
         title: "On Cooldown",
         description: `Observe is on cooldown. ${timerSystem.formatTime(remaining)} remaining.`,
@@ -2300,22 +2653,65 @@ const Arena = () => {
     const expiresAt = new Date();
     expiresAt.setMinutes(expiresAt.getMinutes() + 3);
     
-    await supabase.from("observe_status").upsert({
-        user_id: userId,
-      expires_at: expiresAt.toISOString(),
-    });
+    // Use update-then-insert pattern to avoid conflicts
+    const { data: observeUpdateData, error: observeUpdateError } = await supabase
+      .from("observe_status")
+      .update({
+        expires_at: expiresAt.toISOString(),
+      })
+      .eq("user_id", userId)
+      .select();
     
-    // Set cooldown (5 minutes)
+    // If update didn't affect any rows (no existing record), insert new one
+    if (!observeUpdateData || observeUpdateData.length === 0) {
+      const { error: observeInsertError } = await supabase
+        .from("observe_status")
+        .insert({
+          user_id: userId,
+          expires_at: expiresAt.toISOString(),
+        });
+      
+      if (observeInsertError && observeInsertError.code !== '23505') {
+        console.error("Error inserting observe status:", observeInsertError);
+      }
+    } else if (observeUpdateError) {
+      console.error("Error updating observe status:", observeUpdateError);
+    }
+    
+    // Set cooldown (5 minutes) - use update-then-insert pattern to avoid 409 conflicts
     const cooldownExpires = timerSystem.calculateCooldownExpiration(5);
-    await supabase
+    
+    // Try update first (most common case - cooldown already exists)
+    const { data: cooldownUpdateData, error: cooldownUpdateError } = await supabase
       .from("action_cooldowns")
-      .upsert({
-        user_id: userId,
-        action_type: "observe",
+      .update({
         expires_at: cooldownExpires.toISOString(),
-      });
+      })
+      .eq("user_id", userId)
+      .eq("action_type", "observe")
+      .select();
+    
+    // If update didn't affect any rows (no existing record), insert new one
+    if (!cooldownUpdateData || cooldownUpdateData.length === 0) {
+      const { error: cooldownInsertError } = await supabase
+        .from("action_cooldowns")
+        .insert({
+          user_id: userId,
+          action_type: "observe",
+          expires_at: cooldownExpires.toISOString(),
+        });
+      
+      if (cooldownInsertError && cooldownInsertError.code !== '23505') { // Ignore duplicate key errors (race condition)
+        console.error("Error inserting observe cooldown:", cooldownInsertError);
+      }
+    } else if (cooldownUpdateError) {
+      console.error("Error updating observe cooldown:", cooldownUpdateError);
+    }
     
     setActionCooldowns(prev => ({ ...prev, observe: cooldownExpires.toISOString() }));
+    
+    // Refresh cooldowns from database to ensure sync
+    await fetchCooldowns(userId);
     const now = new Date();
     setLastActionTime(now);
     
@@ -2333,9 +2729,12 @@ const Arena = () => {
         zone_id: currentZone,
     });
     
+    // Refresh player statuses to show observe status
+    await fetchPlayerStatuses(userId);
+    
     toast({
       title: "Observing Zones",
-      description: "You can now target anyone anywhere for 3 minutes",
+      description: "You can now target one opponent anywhere",
     });
   };
   
@@ -2594,6 +2993,16 @@ const Arena = () => {
       });
       return;
     }
+
+    // Block action until cooldowns are loaded
+    if (!cooldownsLoaded) {
+      toast({
+        title: "Loading",
+        description: "Please wait while cooldowns are being loaded...",
+        variant: "destructive",
+      });
+      return;
+    }
     
     // Check action limit (1 action + 1 technique per minute)
     if (lastTechniqueTime && new Date().getTime() - lastTechniqueTime.getTime() < 60000) {
@@ -2691,7 +3100,48 @@ const Arena = () => {
       return;
     }
     
-    // Check cooldown
+    // ALWAYS check database first to prevent refresh exploit
+    // This ensures we have the latest cooldown state from the database
+    const { data: techniqueCooldownData, error: cooldownError } = await supabase
+      .from("technique_cooldowns")
+      .select("expires_at")
+      .eq("user_id", userId)
+      .eq("technique_id", selectedTechnique)
+      .gt("expires_at", new Date().toISOString())
+      .maybeSingle();
+
+    if (cooldownError) {
+      // Only log non-network errors (network errors are expected during connectivity issues)
+      const errorMsg = cooldownError.message?.toLowerCase() || '';
+      const isNetworkError = errorMsg.includes('fetch') || 
+                             errorMsg.includes('network') ||
+                             errorMsg.includes('failed') ||
+                             errorMsg.includes('timeout') ||
+                             cooldownError.code === 'PGRST116' ||
+                             cooldownError.code === 'PGRST301';
+      if (!isNetworkError) {
+        console.error("Error checking cooldown:", cooldownError);
+      }
+      // On network error, fall back to state check (better than blocking user)
+    }
+
+    // If cooldown exists in database, use it (even if state says otherwise)
+    if (techniqueCooldownData && techniqueCooldownData.expires_at && !timerSystem.isCooldownExpired(techniqueCooldownData.expires_at)) {
+      const remaining = timerSystem.getRemainingCooldown(techniqueCooldownData.expires_at);
+      // Update state with database value to keep it in sync
+      setTechniqueCooldowns(prev => ({
+        ...prev,
+        [selectedTechnique]: techniqueCooldownData.expires_at,
+      }));
+      toast({
+        title: "Technique on Cooldown",
+        description: `${timerSystem.formatTime(remaining)} remaining`,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Also check state as a quick check (but database is authoritative)
     if (techniqueCooldowns[selectedTechnique] && !timerSystem.isCooldownExpired(techniqueCooldowns[selectedTechnique])) {
       const remaining = timerSystem.getRemainingCooldown(techniqueCooldowns[selectedTechnique]);
       toast({
@@ -2969,18 +3419,41 @@ const Arena = () => {
     // Set cooldown
     if (techniqueData.cooldown_minutes > 0) {
       const cooldownExpires = timerSystem.calculateCooldownExpiration(techniqueData.cooldown_minutes);
-      await supabase
+      
+      // Try update first (most common case - cooldown already exists)
+      const { data: cooldownUpdateData, error: cooldownUpdateError } = await supabase
         .from("technique_cooldowns")
-        .upsert({
-          user_id: userId,
-          technique_id: selectedTechnique,
+        .update({
           expires_at: cooldownExpires.toISOString(),
-        });
+        })
+        .eq("user_id", userId)
+        .eq("technique_id", selectedTechnique)
+        .select();
+      
+      // If update didn't affect any rows (no existing record), insert new one
+      if (!cooldownUpdateData || cooldownUpdateData.length === 0) {
+        const { error: cooldownInsertError } = await supabase
+          .from("technique_cooldowns")
+          .insert({
+            user_id: userId,
+            technique_id: selectedTechnique,
+            expires_at: cooldownExpires.toISOString(),
+          });
+        
+        if (cooldownInsertError && cooldownInsertError.code !== '23505') { // Ignore duplicate key errors (race condition)
+          console.error("Error inserting technique cooldown:", cooldownInsertError);
+        }
+      } else if (cooldownUpdateError) {
+        console.error("Error updating technique cooldown:", cooldownUpdateError);
+      }
       
       setTechniqueCooldowns(prev => ({
         ...prev,
         [selectedTechnique]: cooldownExpires.toISOString(),
       }));
+      
+      // Refresh cooldowns from database to ensure sync
+      await fetchCooldowns(userId);
     }
     
     // Update timestamps
@@ -3228,16 +3701,15 @@ const Arena = () => {
               </Button>
               )}
               
-              {/* Action Buttons - Always visible, disabled when not joined or arena closed */}
+              {/* Action Buttons - Only visible when arena is open and user has joined */}
+              {hasJoined && currentSession && timerSystem.isArenaOpen(currentSession.opened_at, currentSession.closed_at) && (
               <div className="mt-4 space-y-2">
                 <Button 
                   onClick={handleAttack}
                   className="w-full"
                   variant="destructive"
                   disabled={
-                    !hasJoined ||
-                    !currentSession ||
-                    !timerSystem.isArenaOpen(currentSession.opened_at, currentSession.closed_at) ||
+                    !cooldownsLoaded ||
                     !timerSystem.isCooldownExpired(actionCooldowns["attack"]) ||
                     (lastActionTime && new Date().getTime() - lastActionTime.getTime() < 60000) ||
                     statusSystem.statusBlocksActions(playerStatuses.map(s => s.status))
@@ -3255,9 +3727,7 @@ const Arena = () => {
                   className="w-full"
                   variant="outline"
                   disabled={
-                    !hasJoined ||
-                    !currentSession ||
-                    !timerSystem.isArenaOpen(currentSession.opened_at, currentSession.closed_at) ||
+                    !cooldownsLoaded ||
                     (lastActionTime && new Date().getTime() - lastActionTime.getTime() < 60000) ||
                     statusSystem.statusBlocksActions(playerStatuses.map(s => s.status))
                   }
@@ -3269,9 +3739,7 @@ const Arena = () => {
                   className="w-full"
                   variant="outline"
                   disabled={
-                    !hasJoined ||
-                    !currentSession ||
-                    !timerSystem.isArenaOpen(currentSession.opened_at, currentSession.closed_at) ||
+                    !cooldownsLoaded ||
                     mastery < 1 ||
                     !timerSystem.isCooldownExpired(actionCooldowns["observe"]) ||
                     (lastActionTime && new Date().getTime() - lastActionTime.getTime() < 60000) ||
@@ -3303,13 +3771,17 @@ const Arena = () => {
                   )}
                 </Button>
               </div>
+              )}
               
               {/* Legacy Take Action Button (for techniques) */}
-              {hasJoined && (
+              {hasJoined && currentSession && (
               <Button 
                 onClick={() => setShowActionDialog(true)}
                   className="w-full mt-2"
                 variant="default"
+                disabled={
+                  !timerSystem.isArenaOpen(currentSession.opened_at, currentSession.closed_at)
+                }
               >
                   Use Technique
               </Button>
@@ -3460,6 +3932,20 @@ const Arena = () => {
                                         </div>
                                       </div>
                                       
+                                      {/* Active Statuses for Other Players */}
+                                      {player.user_id !== userId && playerStatusesMap[player.user_id] && playerStatusesMap[player.user_id].length > 0 && (
+                                        <div className="pt-4 border-t">
+                                          <p className="text-xs font-semibold text-muted-foreground mb-2">Active Statuses:</p>
+                                          <div className="flex flex-wrap gap-1">
+                                            {playerStatusesMap[player.user_id].map((status) => (
+                                              <Badge key={status.id} variant="secondary" className="text-xs">
+                                                {status.status}
+                                              </Badge>
+                                            ))}
+                                          </div>
+                                        </div>
+                                      )}
+                                      
                                       {/* Action Buttons - Always visible for other players */}
                                       {player.user_id !== userId && (
                                         <div className="space-y-2 pt-4 border-t">
@@ -3474,14 +3960,17 @@ const Arena = () => {
                                               // Only check zone when targeting (not untargeting)
                                               if (!isUntargeting) {
                                                 // Check if in same zone or observing
-                                                const { data: observeStatus } = await supabase
+                                                const { data: observeStatus, error: observeError } = await supabase
                                                   .from("observe_status")
                                                   .select("expires_at")
                                                   .eq("user_id", userId)
                                                   .gt("expires_at", new Date().toISOString())
                                                   .maybeSingle();
                                                 
-                                                if (player.zone_id !== currentZone && !observeStatus) {
+                                                // If observe status exists and hasn't expired, allow targeting
+                                                const isObserving = observeStatus && observeStatus.expires_at && new Date(observeStatus.expires_at) > new Date();
+                                                
+                                                if (player.zone_id !== currentZone && !isObserving) {
                                                   toast({
                                                     title: "Error",
                                                     description: "You are not in the same zone",
@@ -3544,31 +4033,104 @@ const Arena = () => {
                                                 return;
                                               }
                                               
-                                              // Deduct Mastery and teleport
+                                              // Teleport to target's zone (no cooldown, just change zone directly)
+                                              // Validate zone exists
+                                              const zoneExists = zones.find((z) => z.id === player.zone_id);
+                                              if (!zoneExists) {
+                                                toast({
+                                                  title: "Error",
+                                                  description: "Invalid zone. Please refresh the page.",
+                                                  variant: "destructive",
+                                                });
+                                                return;
+                                              }
+
+                                              // Change zone - update first, insert if no record exists
+                                              const { data: updateData, error: updateError } = await supabase
+                                                .from("player_positions")
+                                                .update({
+                                                  zone_id: player.zone_id,
+                                                  last_moved_at: new Date().toISOString(),
+                                                })
+                                                .eq("user_id", userId)
+                                                .select()
+                                                .maybeSingle();
+
+                                              // If update didn't affect any rows (no existing record), insert new record
+                                              if (!updateError && !updateData) {
+                                                const { error: insertError } = await supabase
+                                                  .from("player_positions")
+                                                  .insert({
+                                                    user_id: userId,
+                                                    zone_id: player.zone_id,
+                                                    last_moved_at: new Date().toISOString(),
+                                                  });
+
+                                                if (insertError) {
+                                                  console.error("Zone change insert error:", insertError);
+                                                  // If insert fails with conflict, try update one more time (race condition)
+                                                  if (insertError.code === "23505" || insertError.message?.includes("duplicate") || insertError.message?.includes("409")) {
+                                                    const { error: retryError } = await supabase
+                                                      .from("player_positions")
+                                                      .update({
+                                                        zone_id: player.zone_id,
+                                                        last_moved_at: new Date().toISOString(),
+                                                      })
+                                                      .eq("user_id", userId);
+                                                    
+                                                    if (retryError) {
+                                                      toast({
+                                                        title: "Error",
+                                                        description: `Failed to change zone: ${retryError.message || "Unknown error"}`,
+                                                        variant: "destructive",
+                                                      });
+                                                      return;
+                                                    }
+                                                  } else {
+                                                    toast({
+                                                      title: "Error",
+                                                      description: `Failed to change zone: ${insertError.message || "Unknown error"}`,
+                                                      variant: "destructive",
+                                                    });
+                                                    return;
+                                                  }
+                                                }
+                                              } else if (updateError) {
+                                                console.error("Zone change update error:", updateError);
+                                                toast({
+                                                  title: "Error",
+                                                  description: `Failed to change zone: ${updateError.message || "Unknown error"}`,
+                                                  variant: "destructive",
+                                                });
+                                                return;
+                                              }
+
+                                              // Zone change successful - now deduct Mastery
                                               const newMastery = mastery - 3;
-                                              setMastery(newMastery);
+                                              
+                                              // Update mastery in database first
                                               const { error: masteryError } = await supabase
                                                 .from("profiles")
                                                 .update({ mastery: newMastery })
                                                 .eq("id", userId);
                                               
                                               if (masteryError) {
+                                                console.error("Failed to deduct Mastery:", masteryError);
                                                 toast({
-                                                  title: "Error",
-                                                  description: "Failed to deduct Mastery",
+                                                  title: "Warning",
+                                                  description: "Zone changed but failed to deduct Mastery. Please contact support.",
                                                   variant: "destructive",
                                                 });
-                                                return;
+                                                // Don't return - zone change already succeeded, just log the error
+                                              } else {
+                                                // Only update local state if database update succeeded
+                                                setMastery(newMastery);
                                               }
-                                              
-                                              // Teleport to target's zone
-                                              await handleChangeZoneNew(player.zone_id);
+
+                                              setCurrentZone(player.zone_id);
                                               
                                               // Refresh player positions to update UI
                                               await fetchPlayerPositions();
-                                              
-                                              // Update current zone state
-                                              setCurrentZone(player.zone_id);
                                               
                                               setShowPlayerPopup(null);
                                               
@@ -3700,35 +4262,69 @@ const Arena = () => {
                 <h2 className="text-xl font-bold text-foreground">Battle Feed</h2>
               </div>
               <div className="space-y-4 max-h-[900px] overflow-y-auto">
-                {arenaPosts.length === 0 ? (
+                {battleFeed.length === 0 ? (
                   <p className="text-sm text-muted-foreground">No actions yet</p>
                 ) : (
-                  arenaPosts.map((post) => (
+                  battleFeed.map((post) => {
+                    const postProfiles = post.profiles || { username: "Unknown", profile_picture_url: "" };
+                    return (
                     <Card key={post.id} className="bg-card/50">
                       <CardContent className="p-4">
                         <div className="flex items-start gap-3">
                           <Avatar className="w-10 h-10 border-2 border-border">
                             <AvatarImage
-                              src={resolveProfileImage(post.profiles.profile_picture_url)}
-                              alt={post.profiles.username}
+                              src={resolveProfileImage(postProfiles.profile_picture_url)}
+                              alt={postProfiles.username}
                             />
                             <AvatarFallback>
-                              {post.profiles.username.substring(0, 2).toUpperCase()}
+                              {postProfiles.username.substring(0, 2).toUpperCase()}
                             </AvatarFallback>
                           </Avatar>
                           <div className="flex-1 space-y-1">
                             <div className="flex items-center gap-2 flex-wrap">
-                              <p className="font-semibold text-sm">{post.profiles.username}</p>
-                              <Badge variant="outline" className="text-xs">
-                                {post.technique_name}
-                              </Badge>
+                              <p className="font-semibold text-sm">{postProfiles.username}</p>
+                              {post.action_type === "attack" && post.target_profile && (
+                                <>
+                                  <span className="text-xs text-muted-foreground">→</span>
+                                  <Avatar className="w-6 h-6 border border-border">
+                                    <AvatarImage
+                                      src={resolveProfileImage(post.target_profile.profile_picture_url)}
+                                      alt={post.target_profile.username}
+                                    />
+                                    <AvatarFallback className="text-xs">
+                                      {post.target_profile.username.substring(0, 2).toUpperCase()}
+                                    </AvatarFallback>
+                                  </Avatar>
+                                  <p className="font-semibold text-sm">{post.target_profile.username}</p>
+                                </>
+                              )}
+                              {post.action_type === "attack" && !post.target_profile && post.zone_id && (
+                                <>
+                                  <span className="text-xs text-muted-foreground">→</span>
+                                  <p className="font-semibold text-sm text-muted-foreground">
+                                    {zones.find(z => z.id === post.zone_id)?.name || ZONE_IMAGE_NAMES[zones.findIndex(z => z.id === post.zone_id) % ZONE_IMAGE_NAMES.length] || "Zone"}
+                                  </p>
+                                </>
+                              )}
+                              {post.action_type === "attack" && !post.target_profile && !post.zone_id && post.target_user_id && (
+                                <>
+                                  <span className="text-xs text-muted-foreground">→</span>
+                                  <p className="font-semibold text-sm text-muted-foreground">Target</p>
+                                </>
+                              )}
+                              {post.technique_name && (
+                                <Badge variant="outline" className="text-xs">
+                                  {post.technique_name}
+                                </Badge>
+                              )}
                               <span className="text-xs text-muted-foreground">
                                 {new Date(post.created_at).toLocaleString()}
                               </span>
                             </div>
                             <div className="text-sm text-foreground">
                               {(() => {
-                                const lines = post.description.split('\n');
+                                const description = post.description || "";
+                                const lines = description.split('\n').filter(line => line.trim() !== '');
                                 const isExpanded = expandedPosts.has(post.id);
                                 const shouldTruncate = lines.length > 4;
                                 const displayLines = shouldTruncate && !isExpanded ? lines.slice(0, 4) : lines;
@@ -3791,7 +4387,8 @@ const Arena = () => {
                         </div>
                       </CardContent>
                     </Card>
-                  ))
+                    );
+                  })
                 )}
               </div>
             </div>
