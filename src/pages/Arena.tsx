@@ -2336,6 +2336,9 @@ const Arena = () => {
     
     // Add to battle feed with target info
     let battleFeedDescription = "";
+    let targetUsername = null;
+    let targetProfilePicture = null;
+    
     if (selectedZoneTarget) {
       const zoneIndex = zones.findIndex((z) => z.id === selectedZoneTarget);
       const zoneName = zoneIndex !== -1 ? ZONE_IMAGE_NAMES[zoneIndex % ZONE_IMAGE_NAMES.length] : zones.find((z) => z.id === selectedZoneTarget)?.name || "zone";
@@ -2343,13 +2346,13 @@ const Arena = () => {
     } else if (currentTarget) {
       // Always fetch target's profile for username and picture
       // Try to get from playerPositions first (faster), then fallback to database
-      let targetUsername = null;
       const targetPlayer = playerPositions.find(p => p.user_id === currentTarget);
       if (targetPlayer && targetPlayer.profiles) {
         targetUsername = targetPlayer.profiles.username;
+        targetProfilePicture = targetPlayer.profiles.profile_picture_url;
       } else {
-        // Fetch from database
-        const { data: targetProfile } = await supabase
+        // Fetch from database - wait for it to complete
+        const { data: targetProfile, error: profileError } = await supabase
           .from("profiles")
           .select("username, profile_picture_url")
           .eq("id", currentTarget)
@@ -2357,14 +2360,17 @@ const Arena = () => {
         
         if (targetProfile) {
           targetUsername = targetProfile.username;
+          targetProfilePicture = targetProfile.profile_picture_url;
+        } else if (profileError) {
+          console.error("Error fetching target profile:", profileError);
         }
       }
       
-      // Always use username if available, otherwise use a fallback
+      // Always use username if available
       if (targetUsername) {
         battleFeedDescription = `Attacked ${targetUsername} for ${damage} damage`;
       } else {
-        // Last resort: use target_user_id to let UI display it properly
+        // If we can't get username, still insert with target_user_id so UI can fetch it
         battleFeedDescription = `Attacked target for ${damage} damage`;
       }
     } else {
@@ -2372,13 +2378,48 @@ const Arena = () => {
       battleFeedDescription = `Attacked for ${damage} damage`;
     }
     
-    await supabase.from("battle_feed").insert({
-      user_id: userId,
-      action_type: "attack",
-      description: battleFeedDescription,
-      zone_id: currentZone,
-      target_user_id: currentTarget || null,
-    });
+    // Insert into battle feed with error handling
+    const { data: battleFeedData, error: battleFeedError } = await supabase
+      .from("battle_feed")
+      .insert({
+        user_id: userId,
+        action_type: "attack",
+        description: battleFeedDescription,
+        zone_id: currentZone,
+        target_user_id: currentTarget || null,
+      })
+      .select()
+      .single();
+    
+    if (battleFeedError) {
+      console.error("Error inserting into battle feed:", battleFeedError);
+      toast({
+        title: "Warning",
+        description: "Attack executed but failed to add to battle feed",
+        variant: "destructive",
+      });
+    } else if (battleFeedData) {
+      // Manually add to battle feed state with target profile if available
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("username, profile_picture_url")
+        .eq("id", userId)
+        .single();
+      
+      if (profile) {
+        const newEntry: BattleFeedEntry = {
+          ...battleFeedData,
+          profiles: profile,
+          target_profile: (targetUsername && currentTarget) ? {
+            username: targetUsername,
+            profile_picture_url: targetProfilePicture || ""
+          } : null
+        };
+        
+        // Add to battle feed state immediately
+        setBattleFeed(prev => [newEntry, ...prev.slice(0, 49)]);
+      }
+    }
     
     toast({
       title: "Attack Executed",
