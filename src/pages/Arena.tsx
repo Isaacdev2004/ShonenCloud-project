@@ -1954,11 +1954,25 @@ const Arena = () => {
         }
       }
       
-      const entriesWithProfiles = data.map((entry: any) => ({
-        ...entry,
-        profiles: profileMap[entry.user_id] || { username: "Unknown", profile_picture_url: "" },
-        target_profile: entry.target_user_id ? (profileMap[entry.target_user_id] || null) : null
-      }));
+      const entriesWithProfiles = data.map((entry: any) => {
+        // Try to get target profile from playerPositions if not in profileMap
+        let targetProfile = entry.target_user_id ? (profileMap[entry.target_user_id] || null) : null;
+        if (!targetProfile && entry.target_user_id) {
+          const targetPlayer = playerPositions.find(p => p.user_id === entry.target_user_id);
+          if (targetPlayer && targetPlayer.profiles) {
+            targetProfile = {
+              username: targetPlayer.profiles.username,
+              profile_picture_url: targetPlayer.profiles.profile_picture_url
+            };
+          }
+        }
+        
+        return {
+          ...entry,
+          profiles: profileMap[entry.user_id] || { username: "Unknown", profile_picture_url: "" },
+          target_profile: targetProfile
+        };
+      });
       
       setBattleFeed(entriesWithProfiles as any);
     } else {
@@ -1966,6 +1980,48 @@ const Arena = () => {
     }
   };
   
+  // Fetch missing target profiles for battle feed entries
+  useEffect(() => {
+    if (battleFeed.length === 0) return;
+    
+    const fetchMissingTargetProfiles = async () => {
+      const entriesNeedingProfiles = battleFeed.filter(
+        entry => entry.action_type === "attack" && 
+        entry.target_user_id && 
+        !entry.target_profile
+      );
+      
+      if (entriesNeedingProfiles.length === 0) return;
+      
+      const targetUserIds = entriesNeedingProfiles.map(e => e.target_user_id).filter(Boolean) as string[];
+      if (targetUserIds.length === 0) return;
+      
+      const { data: profilesData } = await supabase
+        .from("profiles")
+        .select("id, username, profile_picture_url")
+        .in("id", targetUserIds);
+      
+      if (profilesData && profilesData.length > 0) {
+        const profileMap = profilesData.reduce((acc: any, profile: any) => {
+          acc[profile.id] = profile;
+          return acc;
+        }, {});
+        
+        setBattleFeed(prev => prev.map(entry => {
+          if (entry.action_type === "attack" && entry.target_user_id && !entry.target_profile) {
+            const targetProfile = profileMap[entry.target_user_id];
+            if (targetProfile) {
+              return { ...entry, target_profile: targetProfile };
+            }
+          }
+          return entry;
+        }));
+      }
+    };
+    
+    fetchMissingTargetProfiles();
+  }, [battleFeed.length]);
+
   // Real-time battle feed subscription
   useEffect(() => {
     if (!userId) return;
@@ -4306,12 +4362,33 @@ const Arena = () => {
                                   </p>
                                 </>
                               )}
-                              {post.action_type === "attack" && !post.target_profile && !post.zone_id && post.target_user_id && (
-                                <>
-                                  <span className="text-xs text-muted-foreground">→</span>
-                                  <p className="font-semibold text-sm text-muted-foreground">Target</p>
-                                </>
-                              )}
+                              {post.action_type === "attack" && !post.target_profile && !post.zone_id && post.target_user_id && (() => {
+                                // Try to get target from playerPositions as fallback
+                                const targetPlayer = playerPositions.find(p => p.user_id === post.target_user_id);
+                                if (targetPlayer && targetPlayer.profiles) {
+                                  return (
+                                    <>
+                                      <span className="text-xs text-muted-foreground">→</span>
+                                      <Avatar className="w-6 h-6 border border-border">
+                                        <AvatarImage
+                                          src={resolveProfileImage(targetPlayer.profiles.profile_picture_url)}
+                                          alt={targetPlayer.profiles.username}
+                                        />
+                                        <AvatarFallback className="text-xs">
+                                          {targetPlayer.profiles.username.substring(0, 2).toUpperCase()}
+                                        </AvatarFallback>
+                                      </Avatar>
+                                      <p className="font-semibold text-sm">{targetPlayer.profiles.username}</p>
+                                    </>
+                                  );
+                                }
+                                return (
+                                  <>
+                                    <span className="text-xs text-muted-foreground">→</span>
+                                    <p className="font-semibold text-sm text-muted-foreground">Target</p>
+                                  </>
+                                );
+                              })()}
                               {post.technique_name && (
                                 <Badge variant="outline" className="text-xs">
                                   {post.technique_name}
