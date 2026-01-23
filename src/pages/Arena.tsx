@@ -1064,7 +1064,7 @@ const Arena = () => {
     const [battleFeedData, arenaPostsData] = await Promise.all([
       supabase
         .from("battle_feed")
-        .select(`id, user_id, zone_id, technique_name, description, created_at, action_type, target_user_id`)
+        .select("*")
         .order("created_at", { ascending: false })
         .limit(25),
       supabase
@@ -1076,11 +1076,19 @@ const Arena = () => {
 
     const allPosts: any[] = [];
     
+    if (battleFeedData.error) {
+      console.error("Error fetching battle feed:", battleFeedData.error);
+    }
+    
     if (battleFeedData.data) {
       allPosts.push(...battleFeedData.data.map((post: any) => ({
         ...post,
         technique_name: post.technique_name || post.action_type,
       })));
+    }
+    
+    if (arenaPostsData.error) {
+      console.error("Error fetching arena posts:", arenaPostsData.error);
     }
     
     if (arenaPostsData.data) {
