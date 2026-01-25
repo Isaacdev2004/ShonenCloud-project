@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -792,18 +792,71 @@ const Arena = () => {
       
       setUserTechniques(filteredTechniques);
       
-      // Pre-load full technique data
-      const techDataMap: Record<string, any> = {};
-      for (const tech of filteredTechniques) {
-        techDataMap[tech.id] = tech;
-      }
-      setFullTechniqueData(techDataMap);
+      // Pre-load full technique data - merge with existing to preserve any tags already loaded
+      setFullTechniqueData(prev => {
+        const techDataMap: Record<string, any> = { ...prev };
+        for (const tech of filteredTechniques) {
+          // Preserve tags if they already exist in prev data
+          const existing = prev[tech.id];
+          const preservedTags = existing?.tags || tech.tags || existing?.type_info || tech.type_info;
+          techDataMap[tech.id] = { ...tech, tags: preservedTags };
+        }
+        return techDataMap;
+      });
     }
   };
   
+  // Helper function to extract tags from any source - used consistently everywhere
+  const extractTags = useCallback((source: any): string[] => {
+    if (!source) return [];
+    
+    // Try tags field first
+    if (source.tags) {
+      if (Array.isArray(source.tags)) {
+        const arrTags = source.tags.filter((t: any) => t && String(t).trim() !== '');
+        if (arrTags.length > 0) return arrTags;
+      } else if (typeof source.tags === 'string' && source.tags.trim() !== '') {
+        const strTags = source.tags.split(",").map((t: string) => t.trim()).filter((t: string) => t !== '');
+        if (strTags.length > 0) return strTags;
+      }
+    }
+    
+    // Fallback to type_info
+    if (source.type_info && typeof source.type_info === 'string' && source.type_info.trim() !== '') {
+      const typeTags = source.type_info.split(",").map((t: string) => t.trim()).filter((t: string) => t !== '');
+      if (typeTags.length > 0) return typeTags;
+    }
+    
+    return [];
+  }, []);
+
+  // Cache tags for selected technique to prevent disappearing
+  const cachedTags = useMemo(() => {
+    if (!selectedTechnique) return [];
+    
+    const technique = userTechniques.find((t: any) => t.id === selectedTechnique);
+    if (!technique) return [];
+    
+    const fullTech = fullTechniqueData[selectedTechnique];
+    
+    // Extract tags from both sources
+    const tagsFromFullTech = fullTech ? extractTags(fullTech) : [];
+    const tagsFromTechnique = extractTags(technique);
+    
+    // Always prefer technique tags first (they're already loaded), then fullTech
+    // This ensures tags persist even when fullTech is loading or updating
+    const tags = tagsFromTechnique.length > 0 ? tagsFromTechnique : tagsFromFullTech;
+    
+    // Return tags - this will persist across re-renders
+    return tags;
+  }, [selectedTechnique, userTechniques, fullTechniqueData, extractTags]);
+
   // Fetch full technique data when selected
   useEffect(() => {
     if (selectedTechnique && !fullTechniqueData[selectedTechnique]) {
+      // First check if we have the technique in userTechniques to preserve tags
+      const existingTech = userTechniques.find((t: any) => t.id === selectedTechnique);
+      
       supabase
         .from("techniques")
         .select("*")
@@ -811,11 +864,22 @@ const Arena = () => {
         .single()
         .then(({ data, error }) => {
           if (!error && data) {
-            setFullTechniqueData(prev => ({ ...prev, [selectedTechnique]: data }));
+            // Merge with existing technique data to preserve tags if they exist
+            // Preserve tags from existingTech first, then from data, then fallback to type_info
+            const preservedTags = existingTech?.tags || data.tags || existingTech?.type_info || data.type_info;
+            const mergedData = existingTech 
+              ? { ...existingTech, ...data, tags: preservedTags, type_info: data.type_info || existingTech.type_info }
+              : { ...data, tags: preservedTags };
+            
+            setFullTechniqueData(prev => {
+              // Don't overwrite if data already exists (race condition protection)
+              if (prev[selectedTechnique]) return prev;
+              return { ...prev, [selectedTechnique]: mergedData };
+            });
           }
         });
     }
-  }, [selectedTechnique]);
+  }, [selectedTechnique, userTechniques]);
 
   const checkAdminStatus = async (userId: string) => {
     const { data } = await supabase
@@ -1962,27 +2026,45 @@ const Arena = () => {
         }
       }
       
-      const entriesWithProfiles = data.map((entry: any) => {
-        // Try to get target profile from playerPositions if not in profileMap
-        let targetProfile = entry.target_user_id ? (profileMap[entry.target_user_id] || null) : null;
-        if (!targetProfile && entry.target_user_id) {
-          const targetPlayer = playerPositions.find(p => p.user_id === entry.target_user_id);
-          if (targetPlayer && targetPlayer.profiles) {
-            targetProfile = {
-              username: targetPlayer.profiles.username,
-              profile_picture_url: targetPlayer.profiles.profile_picture_url
+      // Merge with existing battle feed to preserve target_profile data
+      setBattleFeed(prev => {
+        const existingMap = new Map(prev.map(e => [e.id, e]));
+        
+        const entriesWithProfiles = data.map((entry: any) => {
+          // Check if we already have this entry with target_profile
+          const existing = existingMap.get(entry.id);
+          if (existing && existing.target_profile) {
+            // Preserve existing target_profile if it exists
+            return {
+              ...entry,
+              profiles: profileMap[entry.user_id] || existing.profiles || { username: "Unknown", profile_picture_url: "" },
+              target_profile: existing.target_profile
             };
           }
-        }
+          
+          // Try to get target profile from profileMap first
+          let targetProfile = entry.target_user_id ? (profileMap[entry.target_user_id] || null) : null;
+          
+          // If not in profileMap, try playerPositions
+          if (!targetProfile && entry.target_user_id) {
+            const targetPlayer = playerPositions.find(p => p.user_id === entry.target_user_id);
+            if (targetPlayer && targetPlayer.profiles) {
+              targetProfile = {
+                username: targetPlayer.profiles.username,
+                profile_picture_url: targetPlayer.profiles.profile_picture_url
+              };
+            }
+          }
+          
+          return {
+            ...entry,
+            profiles: profileMap[entry.user_id] || { username: "Unknown", profile_picture_url: "" },
+            target_profile: targetProfile
+          };
+        });
         
-        return {
-          ...entry,
-          profiles: profileMap[entry.user_id] || { username: "Unknown", profile_picture_url: "" },
-          target_profile: targetProfile
-        };
+        return entriesWithProfiles as any;
       });
-      
-      setBattleFeed(entriesWithProfiles as any);
     } else {
       setBattleFeed([]);
     }
@@ -2083,7 +2165,23 @@ const Arena = () => {
           // Only add to battle feed if entry is within 5 minutes (auto-delete old entries)
           const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
           if (newEntry.created_at && new Date(newEntry.created_at) > fiveMinutesAgo) {
-            setBattleFeed(prev => [newEntry, ...prev.slice(0, 49)]);
+            // Check if entry already exists (don't duplicate)
+            setBattleFeed(prev => {
+              const exists = prev.some(e => e.id === newEntry.id);
+              if (exists) {
+                // Update existing entry with new data (preserve target_profile if it exists)
+                return prev.map(e => {
+                  if (e.id === newEntry.id) {
+                    return {
+                      ...newEntry,
+                      target_profile: newEntry.target_profile || e.target_profile
+                    };
+                  }
+                  return e;
+                });
+              }
+              return [newEntry, ...prev.slice(0, 49)];
+            });
           }
           
           // If it's not from current user, show vanishing toast
@@ -2407,12 +2505,44 @@ const Arena = () => {
         .single();
       
       if (attackerProfile) {
+        // Ensure targetProfile is set - fetch again if needed
+        let finalTargetProfile = targetProfile;
+        if (!finalTargetProfile && currentTarget) {
+          // Last attempt to get target profile
+          const targetPlayer = playerPositions.find(p => p.user_id === currentTarget);
+          if (targetPlayer && targetPlayer.profiles) {
+            finalTargetProfile = {
+              username: targetPlayer.profiles.username,
+              profile_picture_url: targetPlayer.profiles.profile_picture_url
+            };
+          } else {
+            const { data: targetProfileData } = await supabase
+              .from("profiles")
+              .select("username, profile_picture_url")
+              .eq("id", currentTarget)
+              .single();
+            if (targetProfileData) {
+              finalTargetProfile = {
+                username: targetProfileData.username,
+                profile_picture_url: targetProfileData.profile_picture_url
+              };
+            }
+          }
+        }
+        
         // Create entry with both attacker and target profiles
         const newEntry: BattleFeedEntry = {
           ...battleFeedData,
           profiles: attackerProfile,
-          target_profile: targetProfile
+          target_profile: finalTargetProfile
         };
+        
+        console.log("Adding attack entry to battle feed:", {
+          id: newEntry.id,
+          hasTargetProfile: !!newEntry.target_profile,
+          targetUsername: newEntry.target_profile?.username,
+          targetUserId: currentTarget
+        });
         
         // Add to battle feed state immediately so it shows up right away
         setBattleFeed(prev => [newEntry, ...prev.slice(0, 49)]);
@@ -3120,6 +3250,9 @@ const Arena = () => {
     // Get technique data (use cached or fetch)
     let techniqueData = fullTechniqueData[selectedTechnique];
     if (!techniqueData) {
+      // First check if we have the technique in userTechniques to preserve tags
+      const existingTech = userTechniques.find((t: any) => t.id === selectedTechnique);
+      
       const { data, error: techError } = await supabase
         .from("techniques")
         .select("*")
@@ -3134,8 +3267,21 @@ const Arena = () => {
         });
         return;
       }
-      techniqueData = data;
-      setFullTechniqueData(prev => ({ ...prev, [selectedTechnique]: data }));
+      
+      // Merge with existing technique data to preserve tags if they exist
+      // Preserve tags from existingTech first, then from data, then fallback to type_info
+      const preservedTags = existingTech?.tags || data.tags || existingTech?.type_info || data.type_info;
+      const mergedData = existingTech 
+        ? { ...existingTech, ...data, tags: preservedTags, type_info: data.type_info || existingTech.type_info }
+        : { ...data, tags: preservedTags };
+      
+      techniqueData = mergedData;
+      setFullTechniqueData(prev => {
+        // Preserve existing tags if they exist
+        const existing = prev[selectedTechnique];
+        const finalTags = existing?.tags || preservedTags;
+        return { ...prev, [selectedTechnique]: { ...mergedData, tags: finalTags } };
+      });
     }
     
     // Check if user can use technique (status checks)
@@ -4631,141 +4777,146 @@ const Arena = () => {
                   </div>
 
                   {/* Selected Technique Details - Enhanced with all new fields */}
-                  {selectedTechnique && (
-                    <div className="mt-4 rounded-md border border-border bg-muted/40 p-3 text-sm text-foreground space-y-2">
-                      {(() => {
-                        const technique = userTechniques.find((t: any) => t.id === selectedTechnique);
-                        if (!technique) return null;
+                  {selectedTechnique && (() => {
+                    const technique = userTechniques.find((t: any) => t.id === selectedTechnique);
+                    if (!technique) return null;
+                    
+                    // Use full technique data if available, but merge with technique to preserve all data
+                    // IMPORTANT: Preserve tags from both sources - tags might be in either location
+                    const fullTech = fullTechniqueData[selectedTechnique];
+                    
+                    // Use cached tags to prevent disappearing - they're calculated in useMemo above
+                    const tags = cachedTags;
+                    
+                    // Determine tags from both sources before merging (for preserving in merged object)
+                    // IMPORTANT: Prioritize technique tags to prevent them from being overwritten
+                    const tagsFromFullTechRaw = fullTech?.tags || fullTech?.type_info || null;
+                    const tagsFromTechniqueRaw = technique?.tags || technique?.type_info || null;
+                    // Always prefer technique tags first to ensure they persist
+                    const preservedTags = tagsFromTechniqueRaw || tagsFromFullTechRaw;
+                    
+                    // Merge: technique first (base), then fullTech (overwrites), but preserve tags explicitly
+                    const tech = fullTech 
+                      ? { ...technique, ...fullTech, tags: preservedTags }
+                      : technique;
+                    const isOnCooldown = techniqueCooldowns[selectedTechnique] && !timerSystem.isCooldownExpired(techniqueCooldowns[selectedTechnique]);
+                    const canUse = !isOnCooldown && 
+                                  (tech.energy_cost || 0) <= (energy || 0) &&
+                                  (!tech.no_use_m || mastery >= tech.no_use_m) &&
+                                  (!tags.includes("Combo") || mastery >= 1.5);
+                    
+                    return (
+                      <div className="mt-4 rounded-md border border-border bg-muted/40 p-3 text-sm text-foreground space-y-2">
+                        <div className="flex items-center justify-between">
+                          <p className="font-semibold">{tech.name}</p>
+                          {tech.image_url && (
+                            <img src={tech.image_url} alt={tech.name} className="w-12 h-12 rounded border border-border" />
+                          )}
+                        </div>
+                        <p className="mt-1 whitespace-pre-wrap leading-relaxed">
+                          {tech.description}
+                        </p>
                         
-                        // Use full technique data if available
-                        const tech = fullTechniqueData[selectedTechnique] || technique;
-                        // Handle tags - can be array or comma-separated string
-                        let tags: string[] = [];
-                        if (Array.isArray(tech.tags)) {
-                          tags = tech.tags;
-                        } else if (typeof tech.tags === 'string') {
-                          tags = tech.tags.split(",").map(t => t.trim());
-                        } else if (tech.type_info) {
-                          tags = tech.type_info.split(",").map(t => t.trim());
-                        }
-                        const isOnCooldown = techniqueCooldowns[selectedTechnique] && !timerSystem.isCooldownExpired(techniqueCooldowns[selectedTechnique]);
-                        const canUse = !isOnCooldown && 
-                                      (tech.energy_cost || 0) <= (energy || 0) &&
-                                      (!tech.no_use_m || mastery >= tech.no_use_m) &&
-                                      (!tags.includes("Combo") || mastery >= 1.5);
-                        
-                        return (
-                          <>
-                            <div className="flex items-center justify-between">
-                              <p className="font-semibold">{tech.name}</p>
-                              {tech.image_url && (
-                                <img src={tech.image_url} alt={tech.name} className="w-12 h-12 rounded border border-border" />
-                              )}
-                            </div>
-                            <p className="mt-1 whitespace-pre-wrap leading-relaxed">
-                              {tech.description}
+                        {/* New Fields Display */}
+                        <div className="grid grid-cols-2 gap-2 mt-2 text-xs">
+                          {tech.damage > 0 && (
+                            <p><span className="font-semibold">Damage:</span> {tech.damage}</p>
+                          )}
+                          {tech.armor_damage > 0 && (
+                            <p><span className="font-semibold">Armor Damage:</span> {tech.armor_damage}</p>
+                          )}
+                          {tech.aura_damage > 0 && (
+                            <p><span className="font-semibold">Aura Damage:</span> {tech.aura_damage}</p>
+                          )}
+                          {tech.heal > 0 && (
+                            <p><span className="font-semibold">Heal:</span> {tech.heal}</p>
+                          )}
+                          {tech.armor_given > 0 && (
+                            <p><span className="font-semibold">Armor Given:</span> {tech.armor_given}</p>
+                          )}
+                          {tech.given_aura > 0 && (
+                            <p><span className="font-semibold">Aura Given:</span> {tech.given_aura} (2min)</p>
+                          )}
+                          {tech.energy_cost > 0 && (
+                            <p className={tech.energy_cost > (energy || 0) ? "text-destructive" : ""}>
+                              <span className="font-semibold">Energy Cost:</span> {tech.energy_cost}
                             </p>
-                            
-                            {/* New Fields Display */}
-                            <div className="grid grid-cols-2 gap-2 mt-2 text-xs">
-                              {tech.damage > 0 && (
-                                <p><span className="font-semibold">Damage:</span> {tech.damage}</p>
+                          )}
+                          {tech.energy_given > 0 && (
+                            <p><span className="font-semibold">Energy Given:</span> {tech.energy_given}</p>
+                          )}
+                          {tech.cooldown_minutes > 0 && (
+                            <p>
+                              <span className="font-semibold">Cooldown:</span> {tech.cooldown_minutes}min
+                              {isOnCooldown && (
+                                <span className="text-destructive ml-1">
+                                  ({timerSystem.formatTime(timerSystem.getRemainingCooldown(techniqueCooldowns[selectedTechnique]))})
+                                </span>
                               )}
-                              {tech.armor_damage > 0 && (
-                                <p><span className="font-semibold">Armor Damage:</span> {tech.armor_damage}</p>
-                              )}
-                              {tech.aura_damage > 0 && (
-                                <p><span className="font-semibold">Aura Damage:</span> {tech.aura_damage}</p>
-                              )}
-                              {tech.heal > 0 && (
-                                <p><span className="font-semibold">Heal:</span> {tech.heal}</p>
-                              )}
-                              {tech.armor_given > 0 && (
-                                <p><span className="font-semibold">Armor Given:</span> {tech.armor_given}</p>
-                              )}
-                              {tech.given_aura > 0 && (
-                                <p><span className="font-semibold">Aura Given:</span> {tech.given_aura} (2min)</p>
-                              )}
-                              {tech.energy_cost > 0 && (
-                                <p className={tech.energy_cost > (energy || 0) ? "text-destructive" : ""}>
-                                  <span className="font-semibold">Energy Cost:</span> {tech.energy_cost}
-                                </p>
-                              )}
-                              {tech.energy_given > 0 && (
-                                <p><span className="font-semibold">Energy Given:</span> {tech.energy_given}</p>
-                              )}
-                              {tech.cooldown_minutes > 0 && (
-                                <p>
-                                  <span className="font-semibold">Cooldown:</span> {tech.cooldown_minutes}min
-                                  {isOnCooldown && (
-                                    <span className="text-destructive ml-1">
-                                      ({timerSystem.formatTime(timerSystem.getRemainingCooldown(techniqueCooldowns[selectedTechnique]))})
-                                    </span>
-                                  )}
-                                </p>
-                              )}
-                              {tech.atk_boost > 0 && (
-                                <p><span className="font-semibold">ATK Boost:</span> +{tech.atk_boost}</p>
-                              )}
-                              {tech.atk_debuff > 0 && (
-                                <p><span className="font-semibold">ATK Debuff:</span> -{tech.atk_debuff}</p>
-                              )}
-                              {tech.mastery_given > 0 && (
-                                <p><span className="font-semibold">Mastery Given:</span> +{tech.mastery_given}</p>
-                              )}
-                              {tech.mastery_taken > 0 && (
-                                <p><span className="font-semibold">Mastery Taken:</span> -{tech.mastery_taken}</p>
-                              )}
-                              {tech.no_use_m && (
-                                <p className={mastery < tech.no_use_m ? "text-destructive" : ""}>
-                                  <span className="font-semibold">Requires M:</span> {tech.no_use_m}
-                                </p>
-                              )}
-                              {tech.opponent_status && (
-                                <p><span className="font-semibold">Applies Status:</span> {tech.opponent_status}</p>
-                              )}
-                              {tech.self_status && (
-                                <p><span className="font-semibold">Self Status:</span> {tech.self_status}</p>
-                              )}
+                            </p>
+                          )}
+                          {tech.atk_boost > 0 && (
+                            <p><span className="font-semibold">ATK Boost:</span> +{tech.atk_boost}</p>
+                          )}
+                          {tech.atk_debuff > 0 && (
+                            <p><span className="font-semibold">ATK Debuff:</span> -{tech.atk_debuff}</p>
+                          )}
+                          {tech.mastery_given > 0 && (
+                            <p><span className="font-semibold">Mastery Given:</span> +{tech.mastery_given}</p>
+                          )}
+                          {tech.mastery_taken > 0 && (
+                            <p><span className="font-semibold">Mastery Taken:</span> -{tech.mastery_taken}</p>
+                          )}
+                          {tech.no_use_m && (
+                            <p className={mastery < tech.no_use_m ? "text-destructive" : ""}>
+                              <span className="font-semibold">Requires M:</span> {tech.no_use_m}
+                            </p>
+                          )}
+                          {tech.opponent_status && (
+                            <p><span className="font-semibold">Applies Status:</span> {tech.opponent_status}</p>
+                          )}
+                          {tech.self_status && (
+                            <p><span className="font-semibold">Self Status:</span> {tech.self_status}</p>
+                          )}
+                        </div>
+                        
+                        {/* Tags - Always show if tags exist, using persistent calculation */}
+                        {tags.length > 0 && (
+                          <div className="mt-2">
+                            <p className="text-xs font-semibold mb-1">Tags:</p>
+                            <div className="flex flex-wrap gap-1">
+                              {tags.map((tag: string, index: number) => (
+                                <Badge key={`${selectedTechnique}-${tag}-${index}`} variant="outline" className="text-xs">
+                                  {tag}
+                                </Badge>
+                              ))}
                             </div>
-                            
-                            {/* Tags */}
-                            <div className="mt-2">
-                              <p className="text-xs font-semibold mb-1">Tags:</p>
-                              <div className="flex flex-wrap gap-1">
-                                {tags.map((tag: string) => (
-                                  <Badge key={tag} variant="outline" className="text-xs">
-                                    {tag}
-                                  </Badge>
-                                ))}
-                              </div>
-                            </div>
-                            
-                            {/* Requirements Check */}
-                            {!canUse && (
-                              <div className="mt-2 p-2 bg-destructive/10 border border-destructive rounded text-xs">
-                                <p className="font-semibold text-destructive">Cannot Use:</p>
-                                <ul className="list-disc list-inside mt-1 space-y-1">
-                                  {isOnCooldown && (
-                                    <li>Technique is on cooldown</li>
-                                  )}
-                                  {tech.energy_cost > (energy || 0) && (
-                                    <li>Not enough Energy (need {tech.energy_cost}, have {energy || 0})</li>
-                                  )}
-                                  {tech.no_use_m && mastery < tech.no_use_m && (
-                                    <li>Insufficient Mastery (need {tech.no_use_m}, have {mastery.toFixed(2)})</li>
-                                  )}
-                                  {tags.includes("Combo") && mastery < 1.5 && (
-                                    <li>Combo requires 1.5+ Mastery</li>
-                                  )}
-                                </ul>
-                              </div>
-                            )}
-                          </>
-                        );
-                      })()}
-                    </div>
-                  )}
+                          </div>
+                        )}
+                        
+                        {/* Requirements Check */}
+                        {!canUse && (
+                          <div className="mt-2 p-2 bg-destructive/10 border border-destructive rounded text-xs">
+                            <p className="font-semibold text-destructive">Cannot Use:</p>
+                            <ul className="list-disc list-inside mt-1 space-y-1">
+                              {isOnCooldown && (
+                                <li>Technique is on cooldown</li>
+                              )}
+                              {tech.energy_cost > (energy || 0) && (
+                                <li>Not enough Energy (need {tech.energy_cost}, have {energy || 0})</li>
+                              )}
+                              {tech.no_use_m && mastery < tech.no_use_m && (
+                                <li>Insufficient Mastery (need {tech.no_use_m}, have {mastery.toFixed(2)})</li>
+                              )}
+                              {tags.includes("Combo") && mastery < 1.5 && (
+                                <li>Combo requires 1.5+ Mastery</li>
+                              )}
+                            </ul>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </>
               )}
             </div>
