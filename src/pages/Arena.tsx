@@ -2481,22 +2481,108 @@ const Arena = () => {
       battleFeedDescription = `Attacked for ${damage} damage`;
     }
     
+    // Get target profile first (before inserting to battle feed)
+    let finalTargetProfile = targetProfile;
+    if (!finalTargetProfile && currentTarget) {
+      // Try to get target profile from playerPositions first
+      const targetPlayer = playerPositions.find(p => p.user_id === currentTarget);
+      if (targetPlayer && targetPlayer.profiles) {
+        finalTargetProfile = {
+          username: targetPlayer.profiles.username,
+          profile_picture_url: targetPlayer.profiles.profile_picture_url
+        };
+      } else {
+        // Fetch from database if not in playerPositions
+        const { data: targetProfileData } = await supabase
+          .from("profiles")
+          .select("username, profile_picture_url")
+          .eq("id", currentTarget)
+          .single();
+        if (targetProfileData) {
+          finalTargetProfile = {
+            username: targetProfileData.username,
+            profile_picture_url: targetProfileData.profile_picture_url
+          };
+        }
+      }
+    }
+    
     // Insert into battle feed
-    const { data: battleFeedData, error: battleFeedError } = await supabase
-      .from("battle_feed")
-      .insert({
-        user_id: userId,
-        action_type: "attack",
-        description: battleFeedDescription,
-        zone_id: currentZone,
-        target_user_id: currentTarget || null,
-      })
-      .select()
-      .single();
+    // Try with target_user_id first, fallback without it if column doesn't exist
+    let battleFeedData: any = null;
+    let battleFeedError: any = null;
+    
+    const insertData: any = {
+      user_id: userId,
+      action_type: "attack",
+      description: battleFeedDescription,
+      zone_id: currentZone,
+    };
+    
+    // Try with target_user_id first (only if we have a target)
+    if (currentTarget) {
+      insertData.target_user_id = currentTarget;
+      
+      const { data: dataWithTarget, error: errorWithTarget } = await supabase
+        .from("battle_feed")
+        .insert(insertData)
+        .select()
+        .single();
+      
+      // Check if error is about missing column - check code, message, or any mention of target_user_id
+      const isColumnError = errorWithTarget && (
+        errorWithTarget.code === 'PGRST204' || 
+        (typeof errorWithTarget.message === 'string' && (
+          errorWithTarget.message.includes('target_user_id') ||
+          errorWithTarget.message.includes("Could not find") ||
+          errorWithTarget.message.includes("column of 'battle_feed'") ||
+          errorWithTarget.message.includes("schema cache")
+        ))
+      );
+      
+      if (isColumnError) {
+        console.log("target_user_id column not found, retrying without it");
+        // Retry without target_user_id
+        const { data: dataWithoutTarget, error: errorWithoutTarget } = await supabase
+          .from("battle_feed")
+          .insert({
+            user_id: userId,
+            action_type: "attack",
+            description: battleFeedDescription,
+            zone_id: currentZone,
+          })
+          .select()
+          .single();
+        
+        battleFeedData = dataWithoutTarget;
+        battleFeedError = errorWithoutTarget;
+      } else {
+        battleFeedData = dataWithTarget;
+        battleFeedError = errorWithTarget;
+      }
+    } else {
+      // No target, just insert normally
+      const { data, error } = await supabase
+        .from("battle_feed")
+        .insert(insertData)
+        .select()
+        .single();
+      
+      battleFeedData = data;
+      battleFeedError = error;
+    }
     
     if (battleFeedError) {
-      console.error("Error inserting into battle feed:", battleFeedError);
-    } else if (battleFeedData) {
+      // Only log if it's not the expected column error (which we handled with fallback)
+      const isExpectedColumnError = battleFeedError.code === 'PGRST204' || 
+        (typeof battleFeedError.message === 'string' && battleFeedError.message.includes('target_user_id'));
+      
+      if (!isExpectedColumnError) {
+        console.error("Error inserting into battle feed:", battleFeedError);
+      }
+    }
+    
+    if (battleFeedData) {
       // Get attacker's profile
       const { data: attackerProfile } = await supabase
         .from("profiles")
@@ -2505,36 +2591,14 @@ const Arena = () => {
         .single();
       
       if (attackerProfile) {
-        // Ensure targetProfile is set - fetch again if needed
-        let finalTargetProfile = targetProfile;
-        if (!finalTargetProfile && currentTarget) {
-          // Last attempt to get target profile
-          const targetPlayer = playerPositions.find(p => p.user_id === currentTarget);
-          if (targetPlayer && targetPlayer.profiles) {
-            finalTargetProfile = {
-              username: targetPlayer.profiles.username,
-              profile_picture_url: targetPlayer.profiles.profile_picture_url
-            };
-          } else {
-            const { data: targetProfileData } = await supabase
-              .from("profiles")
-              .select("username, profile_picture_url")
-              .eq("id", currentTarget)
-              .single();
-            if (targetProfileData) {
-              finalTargetProfile = {
-                username: targetProfileData.username,
-                profile_picture_url: targetProfileData.profile_picture_url
-              };
-            }
-          }
-        }
-        
         // Create entry with both attacker and target profiles
+        // Even if target_user_id column doesn't exist, we still attach target_profile to the entry
         const newEntry: BattleFeedEntry = {
           ...battleFeedData,
           profiles: attackerProfile,
-          target_profile: finalTargetProfile
+          target_profile: finalTargetProfile,
+          // Store target_user_id in the entry even if DB column doesn't exist
+          target_user_id: currentTarget || null
         };
         
         console.log("Adding attack entry to battle feed:", {
