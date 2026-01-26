@@ -1986,6 +1986,13 @@ const Arena = () => {
     };
   }, [userId]);
   
+  // Helper function to extract target_user_id from description
+  const extractTargetUserIdFromDescription = (description: string | null | undefined): string | null => {
+    if (!description) return null;
+    const match = description.match(/\[target:([^\]]+)\]/);
+    return match ? match[1] : null;
+  };
+  
   // Battle Feed
   const fetchBattleFeed = async () => {
     // Only fetch entries from the last 5 minutes
@@ -2006,7 +2013,10 @@ const Arena = () => {
     if (data && data.length > 0) {
       // Fetch profiles separately since user_id references auth.users, not profiles
       const userIds = Array.from(new Set(data.map((entry: any) => entry.user_id).filter(Boolean)));
-      const targetUserIds = Array.from(new Set(data.map((entry: any) => entry.target_user_id).filter(Boolean)));
+      // Extract target_user_id from both entry.target_user_id (if column exists) and from description
+      const targetUserIdsFromColumn = data.map((entry: any) => entry.target_user_id).filter(Boolean);
+      const targetUserIdsFromDescription = data.map((entry: any) => extractTargetUserIdFromDescription(entry.description)).filter(Boolean);
+      const targetUserIds = Array.from(new Set([...targetUserIdsFromColumn, ...targetUserIdsFromDescription]));
       const allUserIds = Array.from(new Set([...userIds, ...targetUserIds]));
       
       let profileMap: Record<string, any> = {};
@@ -2038,16 +2048,21 @@ const Arena = () => {
             return {
               ...entry,
               profiles: profileMap[entry.user_id] || existing.profiles || { username: "Unknown", profile_picture_url: "" },
-              target_profile: existing.target_profile
+              target_profile: existing.target_profile,
+              // Extract target_user_id from description if not in entry
+              target_user_id: entry.target_user_id || extractTargetUserIdFromDescription(entry.description)
             };
           }
           
+          // Extract target_user_id from description if column doesn't exist
+          const extractedTargetUserId = entry.target_user_id || extractTargetUserIdFromDescription(entry.description);
+          
           // Try to get target profile from profileMap first
-          let targetProfile = entry.target_user_id ? (profileMap[entry.target_user_id] || null) : null;
+          let targetProfile = extractedTargetUserId ? (profileMap[extractedTargetUserId] || null) : null;
           
           // If not in profileMap, try playerPositions
-          if (!targetProfile && entry.target_user_id) {
-            const targetPlayer = playerPositions.find(p => p.user_id === entry.target_user_id);
+          if (!targetProfile && extractedTargetUserId) {
+            const targetPlayer = playerPositions.find(p => p.user_id === extractedTargetUserId);
             if (targetPlayer && targetPlayer.profiles) {
               targetProfile = {
                 username: targetPlayer.profiles.username,
@@ -2059,7 +2074,8 @@ const Arena = () => {
           return {
             ...entry,
             profiles: profileMap[entry.user_id] || { username: "Unknown", profile_picture_url: "" },
-            target_profile: targetProfile
+            target_profile: targetProfile,
+            target_user_id: extractedTargetUserId
           };
         });
         
@@ -2077,13 +2093,17 @@ const Arena = () => {
     const fetchMissingTargetProfiles = async () => {
       const entriesNeedingProfiles = battleFeed.filter(
         entry => entry.action_type === "attack" && 
-        entry.target_user_id && 
+        (entry.target_user_id || extractTargetUserIdFromDescription(entry.description)) && 
         !entry.target_profile
       );
       
       if (entriesNeedingProfiles.length === 0) return;
       
-      const targetUserIds = entriesNeedingProfiles.map(e => e.target_user_id).filter(Boolean) as string[];
+      // Extract target_user_id from entry or description
+      const targetUserIds = entriesNeedingProfiles.map(e => {
+        return e.target_user_id || extractTargetUserIdFromDescription(e.description);
+      }).filter(Boolean) as string[];
+      
       if (targetUserIds.length === 0) return;
       
       const { data: profilesData } = await supabase
@@ -2098,10 +2118,13 @@ const Arena = () => {
         }, {});
         
         setBattleFeed(prev => prev.map(entry => {
-          if (entry.action_type === "attack" && entry.target_user_id && !entry.target_profile) {
-            const targetProfile = profileMap[entry.target_user_id];
-            if (targetProfile) {
-              return { ...entry, target_profile: targetProfile };
+          if (entry.action_type === "attack" && !entry.target_profile) {
+            const targetId = entry.target_user_id || extractTargetUserIdFromDescription(entry.description);
+            if (targetId) {
+              const targetProfile = profileMap[targetId];
+              if (targetProfile) {
+                return { ...entry, target_profile: targetProfile, target_user_id: targetId };
+              }
             }
           }
           return entry;
@@ -2476,10 +2499,12 @@ const Arena = () => {
       }
       
       // Simple description - target will be shown with picture/username in UI
-      battleFeedDescription = `Attacked target for ${damage} damage`;
-    } else {
-      battleFeedDescription = `Attacked for ${damage} damage`;
-    }
+      // Store target_user_id in description for persistence (since column doesn't exist)
+      if (currentTarget) {
+        battleFeedDescription = `Attacked target for ${damage} damage [target:${currentTarget}]`;
+      } else {
+        battleFeedDescription = `Attacked for ${damage} damage`;
+      }
     
     // Get target profile first (before inserting to battle feed)
     let finalTargetProfile = targetProfile;
@@ -4657,7 +4682,10 @@ const Arena = () => {
                             </div>
                             <div className="text-sm text-foreground">
                               {(() => {
-                                const description = post.description || "";
+                                // Clean description - remove [target:xxx] marker for display
+                                let description = post.description || "";
+                                description = description.replace(/\[target:[^\]]+\]/g, '').trim();
+                                
                                 const lines = description.split('\n').filter(line => line.trim() !== '');
                                 const isExpanded = expandedPosts.has(post.id);
                                 const shouldTruncate = lines.length > 4;
