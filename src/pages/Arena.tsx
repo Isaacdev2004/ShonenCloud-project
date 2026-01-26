@@ -2505,6 +2505,7 @@ const Arena = () => {
       } else {
         battleFeedDescription = `Attacked for ${damage} damage`;
       }
+    }
     
     // Get target profile first (before inserting to battle feed)
     let finalTargetProfile = targetProfile;
@@ -4605,6 +4606,8 @@ const Arena = () => {
                 ) : (
                   battleFeed.map((post) => {
                     const postProfiles = post.profiles || { username: "Unknown", profile_picture_url: "" };
+                    // Extract target_user_id from description if needed
+                    const extractedTargetId = post.target_user_id || extractTargetUserIdFromDescription(post.description);
                     return (
                     <Card key={post.id} className="bg-card/50">
                       <CardContent className="p-4">
@@ -4636,10 +4639,9 @@ const Arena = () => {
                                   <p className="font-semibold text-sm">{post.target_profile.username}</p>
                                 </>
                               )}
-                              {post.action_type === "attack" && !post.target_profile && (post.target_user_id || extractTargetUserIdFromDescription(post.description)) && (() => {
+                              {post.action_type === "attack" && !post.target_profile && extractedTargetId && (() => {
                                 // Try to get target from playerPositions as fallback
-                                const targetId = post.target_user_id || extractTargetUserIdFromDescription(post.description);
-                                const targetPlayer = playerPositions.find(p => p.user_id === targetId);
+                                const targetPlayer = playerPositions.find(p => p.user_id === extractedTargetId);
                                 if (targetPlayer && targetPlayer.profiles) {
                                   return (
                                     <>
@@ -4666,7 +4668,7 @@ const Arena = () => {
                                   </>
                                 );
                               })()}
-                              {post.action_type === "attack" && !post.target_profile && !post.target_user_id && !extractTargetUserIdFromDescription(post.description) && post.zone_id && (
+                              {post.action_type === "attack" && !post.target_profile && !extractedTargetId && post.zone_id && (
                                 <>
                                   <span className="text-xs text-muted-foreground">→</span>
                                   <p className="font-semibold text-sm text-muted-foreground">
