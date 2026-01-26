@@ -4636,17 +4636,10 @@ const Arena = () => {
                                   <p className="font-semibold text-sm">{post.target_profile.username}</p>
                                 </>
                               )}
-                              {post.action_type === "attack" && !post.target_profile && post.zone_id && (
-                                <>
-                                  <span className="text-xs text-muted-foreground">→</span>
-                                  <p className="font-semibold text-sm text-muted-foreground">
-                                    {zones.find(z => z.id === post.zone_id)?.name || ZONE_IMAGE_NAMES[zones.findIndex(z => z.id === post.zone_id) % ZONE_IMAGE_NAMES.length] || "Zone"}
-                                  </p>
-                                </>
-                              )}
-                              {post.action_type === "attack" && !post.target_profile && !post.zone_id && post.target_user_id && (() => {
+                              {post.action_type === "attack" && !post.target_profile && (post.target_user_id || extractTargetUserIdFromDescription(post.description)) && (() => {
                                 // Try to get target from playerPositions as fallback
-                                const targetPlayer = playerPositions.find(p => p.user_id === post.target_user_id);
+                                const targetId = post.target_user_id || extractTargetUserIdFromDescription(post.description);
+                                const targetPlayer = playerPositions.find(p => p.user_id === targetId);
                                 if (targetPlayer && targetPlayer.profiles) {
                                   return (
                                     <>
@@ -4664,6 +4657,8 @@ const Arena = () => {
                                     </>
                                   );
                                 }
+                                // If we have a target_user_id but no profile yet, show "Target" instead of zone name
+                                // The useEffect will fetch the profile and update it
                                 return (
                                   <>
                                     <span className="text-xs text-muted-foreground">→</span>
@@ -4671,6 +4666,14 @@ const Arena = () => {
                                   </>
                                 );
                               })()}
+                              {post.action_type === "attack" && !post.target_profile && !post.target_user_id && !extractTargetUserIdFromDescription(post.description) && post.zone_id && (
+                                <>
+                                  <span className="text-xs text-muted-foreground">→</span>
+                                  <p className="font-semibold text-sm text-muted-foreground">
+                                    {zones.find(z => z.id === post.zone_id)?.name || ZONE_IMAGE_NAMES[zones.findIndex(z => z.id === post.zone_id) % ZONE_IMAGE_NAMES.length] || "Zone"}
+                                  </p>
+                                </>
+                              )}
                               {post.technique_name && (
                                 <Badge variant="outline" className="text-xs">
                                   {post.technique_name}

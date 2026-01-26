@@ -612,6 +612,11 @@ const AdminPanel = () => {
     }
 
     try {
+      // Convert tags array to type_info string (comma-separated)
+      const type_info = (newTechnique.tags || []).length > 0 
+        ? (newTechnique.tags || []).join(", ") 
+        : "";
+
       const { error } = await supabase.from("techniques").insert({
         name: newTechnique.name,
         description: newTechnique.description,
@@ -619,6 +624,8 @@ const AdminPanel = () => {
         level_requirement: newTechnique.level_requirement,
         mentor_id: newTechnique.mentor_id,
         image_url: newTechnique.image_url,
+        type_info: type_info, // Required field - convert tags array to comma-separated string
+        cep: "0.0.0", // Deprecated field - placeholder value (will be removed in migration)
         // New Arena System Fields
         damage: newTechnique.damage || 0,
         armor_damage: newTechnique.armor_damage || 0,
@@ -685,6 +692,11 @@ const AdminPanel = () => {
     if (!editingTechnique) return;
 
     try {
+      // Convert tags array to type_info string (comma-separated)
+      const type_info = (editingTechnique.tags || []).length > 0 
+        ? (editingTechnique.tags || []).join(", ") 
+        : "";
+
       const { error } = await supabase
         .from("techniques")
         .update({
@@ -694,6 +706,7 @@ const AdminPanel = () => {
           level_requirement: editingTechnique.level_requirement,
           mentor_id: editingTechnique.mentor_id,
           image_url: editingTechnique.image_url,
+          type_info: type_info, // Required field - convert tags array to comma-separated string
           // New Arena System Fields
           damage: editingTechnique.damage || 0,
           armor_damage: editingTechnique.armor_damage || 0,
