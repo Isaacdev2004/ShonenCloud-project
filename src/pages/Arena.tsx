@@ -171,11 +171,8 @@ const Arena = () => {
   const [arenaMessage, setArenaMessage] = useState<string | null>(null);
   const [showActionDialog, setShowActionDialog] = useState(false);
   const [userTechniques, setUserTechniques] = useState<any[]>([]);
-  const [selectedStatus, setSelectedStatus] = useState("");
-  const [includeDiceRoll, setIncludeDiceRoll] = useState(false);
   const [selectedTechnique, setSelectedTechnique] = useState<string | null>(null);
   const [arenaPosts, setArenaPosts] = useState<ArenaPost[]>([]);
-  const [selectedAction, setSelectedAction] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [playerTitles, setPlayerTitles] = useState<Record<string, UserTitle>>({});
   const [userActiveTitles, setUserActiveTitles] = useState<Array<{ title: string; image_url: string | null }>>([]);
@@ -446,7 +443,7 @@ const Arena = () => {
       const userIds = positions.map(p => p.user_id);
       const { data: profiles, error: profError } = await supabase
         .from("profiles")
-        .select("id, username, profile_picture_url, health, armor, energy, discipline, current_hp, max_hp, current_atk, max_atk, aura")
+        .select("id, username, profile_picture_url, health, armor, energy, discipline, current_hp, max_hp, current_atk, max_atk, aura, mastery")
         .in("id", userIds);
 
       if (profError) {
@@ -1108,21 +1105,6 @@ const Arena = () => {
     { src: "https://i.ibb.co/7JkkMy05/Testing-DONE.jpg", alt: "Testing" },
   ];
 
-  const getStatusOptions = () => {
-    return [
-      { value: "Dropping in", label: "Dropping in", description: "Now joining the fight" },
-      { value: "In an active fight", label: "In an active fight", description: "Fighting an opponent" },
-      { value: "Observing zones", label: "Observing zones", description: "Allows targeting of anyone anywhere" },
-      { value: "Setup in play", label: "Setup in play", description: "No Off and Def usable" },
-      { value: "Setup complete", label: "Setup complete", description: "Can now use Off and Def again" },
-      { value: "Completing a zone signature", label: "Completing a zone signature", description: "Must stay inactive for the # of turns" },
-      { value: "Stunned", label: "Stunned", description: "Cannot do anything" },
-      { value: "Hidden", label: "Hidden", description: "Only affected if revealed or by AOE" },
-      { value: "Evasion mode", label: "Evasion mode", description: "8 turns cooldown, costs half Energy" },
-      { value: "Exploring", label: "Exploring", description: "Exploring the surrounding area within zone" },
-    ];
-  };
-
   const fetchArenaPosts = async () => {
     // Use new battle_feed table, but also keep arena_posts for backward compatibility
     const [battleFeedData, arenaPostsData] = await Promise.all([
@@ -1320,6 +1302,27 @@ const Arena = () => {
   
   // Join System
   const fetchCurrentSession = async () => {
+    // Prefer server-side session sync so arena timers don't depend on an admin client
+    try {
+      const { data: syncedSession, error: syncError } = await (supabase as any).rpc("sync_arena_session");
+      if (!syncError && syncedSession) {
+        setCurrentSession(syncedSession);
+        // Check if user has joined
+        if (userId) {
+          const { data: participant } = await supabase
+            .from("arena_participants")
+            .select("id")
+            .eq("user_id", userId)
+            .eq("session_id", syncedSession.id)
+            .maybeSingle();
+          setHasJoined(!!participant);
+        }
+        return;
+      }
+    } catch {
+      // Ignore RPC errors and fall back to legacy logic below
+    }
+
     // First, try to get an open session
     const { data: openSession, error: openError } = await supabase
       .from("arena_sessions")
@@ -2092,7 +2095,7 @@ const Arena = () => {
     
     const fetchMissingTargetProfiles = async () => {
       const entriesNeedingProfiles = battleFeed.filter(
-        entry => entry.action_type === "attack" && 
+        entry => (entry.action_type === "attack" || entry.action_type === "technique") && 
         (entry.target_user_id || extractTargetUserIdFromDescription(entry.description)) && 
         !entry.target_profile
       );
@@ -2118,7 +2121,7 @@ const Arena = () => {
         }, {});
         
         setBattleFeed(prev => prev.map(entry => {
-          if (entry.action_type === "attack" && !entry.target_profile) {
+          if ((entry.action_type === "attack" || entry.action_type === "technique") && !entry.target_profile) {
             const targetId = entry.target_user_id || extractTargetUserIdFromDescription(entry.description);
             if (targetId) {
               const targetProfile = profileMap[targetId];
@@ -2162,10 +2165,16 @@ const Arena = () => {
             newEntry.profiles = profile;
           }
           
-          // Always fetch target profile if attack action with target_user_id
-          if (newEntry.action_type === "attack" && newEntry.target_user_id) {
+          // Fetch target profile for attack/technique entries (supports marker fallback)
+          const extractedTargetId =
+            newEntry.target_user_id || extractTargetUserIdFromDescription(newEntry.description);
+
+          if ((newEntry.action_type === "attack" || newEntry.action_type === "technique") && extractedTargetId) {
+            // Ensure the entry carries the target id in memory (even if DB column doesn't exist)
+            newEntry.target_user_id = extractedTargetId;
+
             // Try playerPositions first (faster)
-            const targetPlayer = playerPositions.find(p => p.user_id === newEntry.target_user_id);
+            const targetPlayer = playerPositions.find(p => p.user_id === extractedTargetId);
             if (targetPlayer && targetPlayer.profiles) {
               newEntry.target_profile = {
                 username: targetPlayer.profiles.username,
@@ -2176,7 +2185,7 @@ const Arena = () => {
               const { data: targetProfile } = await supabase
                 .from("profiles")
                 .select("username, profile_picture_url")
-                .eq("id", newEntry.target_user_id)
+                .eq("id", extractedTargetId)
                 .single();
               
               if (targetProfile) {
@@ -3811,8 +3820,12 @@ const Arena = () => {
       technique_name: techniqueData.name,
       technique_image_url: techniqueData.image_url,
       technique_description: techniqueData.description,
-      description: `Used ${techniqueData.name}`,
+      // Store current target in description marker so refresh can still resolve it
+      description: currentTarget
+        ? `Used ${techniqueData.name} [target:${currentTarget}]`
+        : `Used ${techniqueData.name}`,
       zone_id: currentZone,
+      target_user_id: currentTarget || null,
     });
     
     // Show success
@@ -3824,9 +3837,6 @@ const Arena = () => {
     // Close dialog and reset
     setShowActionDialog(false);
     setSelectedTechnique(null);
-    setSelectedStatus("");
-    setIncludeDiceRoll(false);
-    setSelectedAction(null);
     
     // Refresh data
     fetchProfile(userId);
@@ -4271,19 +4281,39 @@ const Arena = () => {
                                         </div>
                                       </div>
                                       
-                                      {/* Active Statuses for Other Players */}
-                                      {player.user_id !== userId && playerStatusesMap[player.user_id] && playerStatusesMap[player.user_id].length > 0 && (
-                                        <div className="pt-4 border-t">
-                                          <p className="text-xs font-semibold text-muted-foreground mb-2">Active Statuses:</p>
-                                          <div className="flex flex-wrap gap-1">
-                                            {playerStatusesMap[player.user_id].map((status) => (
-                                              <Badge key={status.id} variant="secondary" className="text-xs">
-                                                {status.status}
-                                              </Badge>
-                                            ))}
+                                      {/* Active Statuses (visible in popup) */}
+                                      {(() => {
+                                        const statusesSource =
+                                          player.user_id === userId
+                                            ? playerStatuses
+                                            : (playerStatusesMap[player.user_id] || []);
+
+                                        const activeStatuses = (statusesSource || []).filter(
+                                          (s) => s?.expires_at && !timerSystem.isCooldownExpired(s.expires_at)
+                                        );
+
+                                        return (
+                                          <div className="pt-4 border-t">
+                                            <p className="text-xs font-semibold text-muted-foreground mb-2">Active Statuses:</p>
+                                            {activeStatuses.length === 0 ? (
+                                              <p className="text-xs text-muted-foreground">None</p>
+                                            ) : (
+                                              <div className="flex flex-wrap gap-1">
+                                                {activeStatuses.map((status) => {
+                                                  const remaining = timerSystem.getRemainingCooldown(status.expires_at);
+                                                  const timeLabel = remaining > 0 ? timerSystem.formatTime(remaining) : "0s";
+                                                  return (
+                                                    <Badge key={status.id} variant="secondary" className="text-xs">
+                                                      {status.status}
+                                                      <span className="ml-1 opacity-70">({timeLabel})</span>
+                                                    </Badge>
+                                                  );
+                                                })}
+                                              </div>
+                                            )}
                                           </div>
-                                        </div>
-                                      )}
+                                        );
+                                      })()}
                                       
                                       {/* Action Buttons - Always visible for other players */}
                                       {player.user_id !== userId && (
@@ -4608,6 +4638,7 @@ const Arena = () => {
                     const postProfiles = post.profiles || { username: "Unknown", profile_picture_url: "" };
                     // Extract target_user_id from description if needed
                     const extractedTargetId = post.target_user_id || extractTargetUserIdFromDescription(post.description);
+                    const showTargetForPost = post.action_type === "attack" || post.action_type === "technique";
                     return (
                     <Card key={post.id} className="bg-card/50">
                       <CardContent className="p-4">
@@ -4624,7 +4655,7 @@ const Arena = () => {
                           <div className="flex-1 space-y-1">
                             <div className="flex items-center gap-2 flex-wrap">
                               <p className="font-semibold text-sm">{postProfiles.username}</p>
-                              {post.action_type === "attack" && post.target_profile && (
+                              {showTargetForPost && post.target_profile && (
                                 <>
                                   <span className="text-xs text-muted-foreground">→</span>
                                   <Avatar className="w-6 h-6 border border-border">
@@ -4639,7 +4670,7 @@ const Arena = () => {
                                   <p className="font-semibold text-sm">{post.target_profile.username}</p>
                                 </>
                               )}
-                              {post.action_type === "attack" && !post.target_profile && extractedTargetId && (() => {
+                              {showTargetForPost && !post.target_profile && extractedTargetId && (() => {
                                 // Try to get target from playerPositions as fallback
                                 const targetPlayer = playerPositions.find(p => p.user_id === extractedTargetId);
                                 if (targetPlayer && targetPlayer.profiles) {
@@ -4698,6 +4729,25 @@ const Arena = () => {
 
                                 return (
                                   <>
+                                    {/* Technique extras: show technique image + description in the post */}
+                                    {post.action_type === "technique" && (post.technique_image_url || post.technique_description) && (
+                                      <div className="mb-2">
+                                        {post.technique_image_url && (
+                                          <div className="my-2">
+                                            <img
+                                              src={post.technique_image_url}
+                                              alt={post.technique_name || "Technique"}
+                                              className="w-[90px] h-[90px] object-cover rounded border-2 border-primary"
+                                            />
+                                          </div>
+                                        )}
+                                        {post.technique_description && (
+                                          <p className="text-xs text-muted-foreground whitespace-pre-wrap leading-relaxed">
+                                            {post.technique_description}
+                                          </p>
+                                        )}
+                                      </div>
+                                    )}
                                     {displayLines.map((line, idx) => {
                                       // Handle images
                                       const imgMatch = line.match(/!\[([^\]]*)\]\(([^)]+)\)/);
@@ -4801,47 +4851,14 @@ const Arena = () => {
         </DialogContent>
       </Dialog>
 
-      {/* Take Action Dialog */}
+      {/* Use Technique Dialog */}
       <Dialog open={showActionDialog} onOpenChange={setShowActionDialog}>
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Take Action</DialogTitle>
+            <DialogTitle>Use Technique</DialogTitle>
           </DialogHeader>
           
           <div className="space-y-6">
-            {/* Codex Section */}
-            {userActiveTitles.length > 0 && (
-              <div>
-                <Label className="text-base font-semibold mb-3 block">Active Codex</Label>
-                <div className="grid grid-cols-8 gap-2">
-                  {userActiveTitles.map((title, index) => (
-                    <TooltipProvider key={index}>
-                      <Tooltip>
-                        <TooltipTrigger>
-                          <div className="w-[45px] h-[45px] border-2 border-primary rounded overflow-hidden">
-                            {title.image_url ? (
-                              <img 
-                                src={title.image_url} 
-                                alt={title.title}
-                                className="w-full h-full object-cover"
-                              />
-                            ) : (
-                              <div className="w-full h-full bg-muted flex items-center justify-center text-xs">
-                                {title.title.substring(0, 2).toUpperCase()}
-                              </div>
-                            )}
-                          </div>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <p className="font-bold">{title.title}</p>
-                        </TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                  ))}
-                </div>
-              </div>
-            )}
-
             {/* Techniques Section */}
             <div>
               <Label className="text-base font-semibold mb-3 block">Your Techniques</Label>
@@ -5016,63 +5033,6 @@ const Arena = () => {
                   })()}
                 </>
               )}
-            </div>
-
-            {/* Status Selection */}
-            <div>
-              <Label className="text-base font-semibold mb-3 block">Status</Label>
-              <Select value={selectedStatus} onValueChange={setSelectedStatus}>
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Select your status" />
-                </SelectTrigger>
-                <SelectContent className="bg-popover">
-                  {getStatusOptions().map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      <div className="flex flex-col items-start">
-                        <span className="font-medium">{option.label}</span>
-                        <span className="text-xs text-muted-foreground">{option.description}</span>
-                      </div>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            {/* Dice Roll */}
-            <div className="flex items-center space-x-2">
-              <Checkbox 
-                id="dice-roll" 
-                checked={includeDiceRoll}
-                onCheckedChange={(checked) => setIncludeDiceRoll(checked as boolean)}
-              />
-              <Label htmlFor="dice-roll" className="cursor-pointer">
-                Include dice roll (2-12) - Result will be shown after posting
-              </Label>
-            </div>
-
-            {/* Action Buttons */}
-            <div>
-              <Label className="text-base font-semibold mb-3 block">Actions (Optional)</Label>
-              <div className="grid grid-cols-3 gap-2">
-                <Button 
-                  onClick={() => setSelectedAction(selectedAction === "change-zone" ? null : "change-zone")}
-                  variant={selectedAction === "change-zone" ? "default" : "outline"}
-                >
-                  Change Zone
-                </Button>
-                <Button 
-                  onClick={() => setSelectedAction(selectedAction === "gather-energy" ? null : "gather-energy")}
-                  variant={selectedAction === "gather-energy" ? "default" : "outline"}
-                >
-                  Gather Energy
-                </Button>
-                <Button 
-                  onClick={() => setSelectedAction(selectedAction === "move-around" ? null : "move-around")}
-                  variant={selectedAction === "move-around" ? "default" : "outline"}
-                >
-                  Move Around
-                </Button>
-              </div>
             </div>
 
             {/* Submit Button */}
