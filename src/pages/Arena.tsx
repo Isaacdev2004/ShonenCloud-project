@@ -443,7 +443,7 @@ const Arena = () => {
       const userIds = positions.map(p => p.user_id);
       const { data: profiles, error: profError } = await supabase
         .from("profiles")
-        .select("id, username, profile_picture_url, health, armor, energy, discipline, current_hp, max_hp, current_atk, max_atk, aura, mastery")
+        .select("id, username, profile_picture_url, health, armor, energy, discipline, level, current_hp, max_hp, current_atk, max_atk, aura, mastery")
         .in("id", userIds);
 
       if (profError) {
@@ -620,6 +620,54 @@ const Arena = () => {
 
     // Refresh player positions
     fetchPlayerPositions();
+  };
+
+  const handleResetPlayerStats = async (targetUserId: string, username: string, level: number | undefined) => {
+    if (!isAdmin) return;
+    if (!targetUserId) return;
+
+    const targetLevel = Math.max(1, Number(level || 1));
+    const baseMaxHP = statsSystem.calculateMaxHP(targetLevel);
+    const baseMaxATK = statsSystem.calculateMaxATK(targetLevel);
+
+    const confirmed = confirm(
+      `Reset ${username}'s stats to base values?\n\n` +
+        `Level: ${targetLevel}\n` +
+        `Max HP: ${baseMaxHP}\n` +
+        `Max ATK: ${baseMaxATK}\n\n` +
+        `This will set current HP/ATK to max, and clear Armor/Aura.`
+    );
+    if (!confirmed) return;
+
+    const { error } = await supabase
+      .from("profiles")
+      .update({
+        max_hp: baseMaxHP,
+        current_hp: baseMaxHP,
+        max_atk: baseMaxATK,
+        current_atk: baseMaxATK,
+        armor: 0,
+        aura: 0,
+        aura_expires_at: null,
+      })
+      .eq("id", targetUserId);
+
+    if (error) {
+      console.error("Failed to reset player stats:", error);
+      toast({
+        title: "Error",
+        description: `Failed to reset stats: ${error.message || "Unknown error"}`,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    toast({
+      title: "Stats Reset",
+      description: `${username}'s stats were reset to base values (Level ${targetLevel}).`,
+    });
+
+    await fetchPlayerPositions();
   };
 
   const getPlayersInZone = (zoneId: string) => {
@@ -2697,9 +2745,17 @@ const Arena = () => {
       
       if (updateError) {
         console.error("Error updating target stats:", updateError);
+        const msg = (updateError.message || "").toLowerCase();
+        const looksLikeRls =
+          msg.includes("row-level security") ||
+          msg.includes("permission denied") ||
+          msg.includes("violates row-level security") ||
+          msg.includes("not allowed");
         toast({
           title: "Error",
-          description: `Failed to apply damage: ${updateError.message}`,
+          description: looksLikeRls
+            ? "Attack failed: database permissions are blocking combat updates for non-admin users. Apply the Supabase migration `20260129000000_fix_arena_non_admin_access.sql`."
+            : `Failed to apply damage: ${updateError.message}`,
           variant: "destructive",
         });
         return;
@@ -3813,20 +3869,97 @@ const Arena = () => {
       .eq("id", userId);
     
     // Add to battle feed
-    await supabase.from("battle_feed").insert({
+    // Try with target_user_id first, fallback without it if the column isn't deployed on the live DB yet.
+    const techniqueFeedDescription = currentTarget
+      ? `Used ${techniqueData.name} [target:${currentTarget}]`
+      : `Used ${techniqueData.name}`;
+
+    let bfData: any = null;
+    let bfError: any = null;
+
+    const baseInsert: any = {
       user_id: userId,
       action_type: "technique",
       technique_id: selectedTechnique,
       technique_name: techniqueData.name,
       technique_image_url: techniqueData.image_url,
       technique_description: techniqueData.description,
-      // Store current target in description marker so refresh can still resolve it
-      description: currentTarget
-        ? `Used ${techniqueData.name} [target:${currentTarget}]`
-        : `Used ${techniqueData.name}`,
+      description: techniqueFeedDescription,
       zone_id: currentZone,
-      target_user_id: currentTarget || null,
-    });
+    };
+
+    if (currentTarget) {
+      const { data: dataWithTarget, error: errorWithTarget } = await supabase
+        .from("battle_feed")
+        .insert({ ...baseInsert, target_user_id: currentTarget })
+        .select()
+        .single();
+
+      const isColumnError = errorWithTarget && (
+        errorWithTarget.code === "PGRST204" ||
+        (typeof errorWithTarget.message === "string" && errorWithTarget.message.includes("target_user_id"))
+      );
+
+      if (isColumnError) {
+        const { data: dataWithoutTarget, error: errorWithoutTarget } = await supabase
+          .from("battle_feed")
+          .insert(baseInsert)
+          .select()
+          .single();
+        bfData = dataWithoutTarget;
+        bfError = errorWithoutTarget;
+      } else {
+        bfData = dataWithTarget;
+        bfError = errorWithTarget;
+      }
+    } else {
+      const { data, error } = await supabase
+        .from("battle_feed")
+        .insert(baseInsert)
+        .select()
+        .single();
+      bfData = data;
+      bfError = error;
+    }
+
+    if (bfError) {
+      console.error("Technique battle feed insert failed:", bfError);
+      toast({
+        title: "Warning",
+        description: "Technique executed, but failed to post to Battle Feed.",
+        variant: "destructive",
+      });
+    } else if (bfData) {
+      // Ensure it shows immediately (subscription can miss due to refresh/reconnect)
+      const { data: attackerProfile } = await supabase
+        .from("profiles")
+        .select("username, profile_picture_url")
+        .eq("id", userId)
+        .single();
+
+      let targetProfile: any = null;
+      if (currentTarget) {
+        const targetPlayer = playerPositions.find((p) => p.user_id === currentTarget);
+        if (targetPlayer?.profiles) {
+          targetProfile = {
+            username: targetPlayer.profiles.username,
+            profile_picture_url: targetPlayer.profiles.profile_picture_url,
+          };
+        }
+      }
+
+      if (attackerProfile) {
+        setBattleFeed((prev) => [
+          {
+            ...(bfData as any),
+            profiles: attackerProfile,
+            target_profile: targetProfile,
+            target_user_id: currentTarget || null,
+          } as any,
+          ...prev.slice(0, 49),
+        ]);
+      }
+    }
     
     // Show success
     toast({
@@ -4517,17 +4650,21 @@ const Arena = () => {
                                       {isAdmin && player.user_id !== userId && (
                                         <Button
                                           size="sm"
-                                          variant="destructive"
+                                          variant="outline"
                                           className="w-full mt-2"
                                           onClick={(e) => {
                                             e.stopPropagation();
-                                            handleRemoveFromArena(player.user_id, player.profiles.username);
+                                            handleResetPlayerStats(
+                                              player.user_id,
+                                              player.profiles.username,
+                                              (player.profiles as any).level
+                                            );
                                             setShowPlayerPopup(null);
                                           }}
                                         >
-                                          Remove from Arena
+                                          Reset stats
                                         </Button>
-                                    )}
+                                      )}
                                   </div>
                                   </DialogContent>
                                 </Dialog>

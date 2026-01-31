@@ -95,7 +95,7 @@ const DataMission = () => {
 
     if (profile) {
       const newXP = profile.xp_points + xp;
-      const newLevel = Math.floor(newXP / 100) + 1;
+      const newLevel = Math.floor(newXP / 200) + 1;
 
       await supabase
         .from("profiles")
