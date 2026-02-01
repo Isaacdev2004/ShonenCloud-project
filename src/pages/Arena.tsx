@@ -1576,6 +1576,28 @@ const Arena = () => {
           title: "Already Joined",
           description: "You are already in the Arena!",
         });
+        // Still ensure the user has a player position row so combat permissions work
+        // (RLS policies check that the attacker has a player_positions row)
+        if (!currentZone && zones.length > 0) {
+          setCurrentZone(zones[0].id);
+        }
+        const zoneIdToUse = currentZone || zones[0]?.id;
+        if (zoneIdToUse) {
+          const { data: existingPos } = await supabase
+            .from("player_positions")
+            .select("user_id")
+            .eq("user_id", userId)
+            .maybeSingle();
+
+          if (!existingPos) {
+            await supabase.from("player_positions").insert({
+              user_id: userId,
+              zone_id: zoneIdToUse,
+              last_moved_at: new Date().toISOString(),
+            });
+          }
+          await fetchPlayerPositions();
+        }
         return;
       }
       toast({
@@ -1591,6 +1613,32 @@ const Arena = () => {
       title: "Joined Arena",
       description: "You have successfully joined the Arena!",
     });
+
+    // Ensure the user has a player position row immediately after joining.
+    // This prevents non-admin combat from being blocked by RLS (which checks player_positions).
+    if (!currentZone && zones.length > 0) {
+      setCurrentZone(zones[0].id);
+    }
+    const zoneIdToUse = currentZone || zones[0]?.id;
+    if (zoneIdToUse) {
+      const { data: existingPos } = await supabase
+        .from("player_positions")
+        .select("user_id")
+        .eq("user_id", userId)
+        .maybeSingle();
+
+      if (!existingPos) {
+        const { error: posInsertError } = await supabase.from("player_positions").insert({
+          user_id: userId,
+          zone_id: zoneIdToUse,
+          last_moved_at: new Date().toISOString(),
+        });
+        if (posInsertError) {
+          console.error("Failed to create player position on join:", posInsertError);
+        }
+      }
+      await fetchPlayerPositions();
+    }
   };
   
   // Timer Management
@@ -2775,14 +2823,15 @@ const Arena = () => {
     }
   };
   
-  const applyKOStatus = async (userId: string) => {
+  const applyKOStatus = async (targetUserId: string) => {
     const duration = statusSystem.calculateStatusDuration(2, "K.O");
     const expiresAt = new Date();
     expiresAt.setMinutes(expiresAt.getMinutes() + duration);
     
     await supabase.from("player_statuses").insert({
-        user_id: userId,
+      user_id: targetUserId,
       status: "K.O",
+      applied_by_user_id: userId || null,
       applied_by_mastery: 2,
       expires_at: expiresAt.toISOString(),
     });
@@ -2792,14 +2841,14 @@ const Arena = () => {
       const { data: statuses } = await supabase
         .from("player_statuses")
         .select("id")
-        .eq("user_id", userId)
+        .eq("user_id", targetUserId)
         .eq("status", "K.O")
         .gt("expires_at", new Date().toISOString())
         .maybeSingle();
       
       if (statuses) {
         // Still K.O, remove from Arena
-        await supabase.from("player_positions").delete().eq("user_id", userId);
+        await supabase.from("player_positions").delete().eq("user_id", targetUserId);
       }
     }, 60000); // 1 minute
   };
