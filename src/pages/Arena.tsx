@@ -1645,194 +1645,40 @@ const Arena = () => {
   useEffect(() => {
     if (!currentSession) return;
     
-    const updateTimers = async () => {
-      // Validate session state against actual time
-      const actualIsOpen = timerSystem.isArenaOpen(currentSession.opened_at, currentSession.closed_at);
-      
-      // If state doesn't match actual time, correct it
-      // This is the PRIMARY mechanism - it checks if the scheduled time has arrived
-      if (currentSession.id && currentSession.id !== "" && currentSession.is_open !== actualIsOpen) {
-        if (actualIsOpen && !currentSession.is_open) {
-          // Should be open but marked as closed - open it immediately
-          const openedAt = new Date();
-          const closedAt = timerSystem.calculateArenaCloseTime(openedAt);
-          const { error } = await supabase
-            .from("arena_sessions")
-            .update({
-              is_open: true,
-              opened_at: openedAt.toISOString(),
-              closed_at: closedAt.toISOString()
-            })
-            .eq("id", currentSession.id);
-          
-          if (!error) {
-            await fetchCurrentSession();
-            return;
-          } else {
-            console.error("Error opening arena session:", error);
-            // Fall through to secondary mechanism below - DON'T return here!
-          }
-        } else if (!actualIsOpen && currentSession.is_open) {
-          // Should be closed but marked as open - close it
-          const closedAt = new Date();
-          await supabase
-            .from("arena_sessions")
-            .update({
-              is_open: false,
-              closed_at: closedAt.toISOString()
-            })
-            .eq("id", currentSession.id);
-          await fetchCurrentSession();
-          return;
-        }
-      }
-      
-      if (currentSession.is_open && actualIsOpen) {
-        const timeUntilClose = timerSystem.getTimeUntilArenaCloses(currentSession.closed_at);
-        setArenaOpenTimer(timeUntilClose);
-        
-        // Check if arena should close
-        if (timeUntilClose <= 0 && currentSession.id) {
-          // Arena should close now
-          const closedAt = new Date();
-          const { error } = await supabase
-            .from("arena_sessions")
-            .update({
-              is_open: false,
-              closed_at: closedAt.toISOString()
-            })
-            .eq("id", currentSession.id);
-          
-          if (!error) {
-            // Refresh session
-            await fetchCurrentSession();
-          }
-        }
-        
-        if (currentSession.battle_timer_ends_at) {
-          const battleTime = timerSystem.getRemainingBattleTimer(currentSession.battle_timer_ends_at);
-          setBattleTimer(battleTime);
-        }
+    // IMPORTANT:
+    // Non-admin users cannot write to arena_sessions (RLS). We therefore do NOT attempt to
+    // open/close/create sessions client-side here. We only compute countdowns locally.
+    const updateTimers = () => {
+      const isOpenNow = timerSystem.isArenaOpen(currentSession.opened_at, currentSession.closed_at);
+
+      if (isOpenNow) {
+        setArenaOpenTimer(timerSystem.getTimeUntilArenaCloses(currentSession.closed_at));
       } else {
-        // When closed, calculate next open time
-        let nextOpenTime: Date | null = null;
+        // Compute next open using closed_at (most reliable). Using opened_at can be in the past
+        // during closed windows, which would make the countdown stick at 00:00.
         const now = new Date();
-        
-        // First, check if opened_at is set (this is the scheduled open time)
-        // Use it whether it's in the past, present, or future - the timer will handle it
-        if (currentSession.opened_at) {
-          const scheduledOpen = new Date(currentSession.opened_at);
-          // Use the scheduled open time (even if it's in the past, as it might have just arrived)
-          nextOpenTime = scheduledOpen;
-        }
-        
-        // If no scheduled time or it's in the past, calculate from closed_at
-        if (!nextOpenTime && currentSession.closed_at) {
-          // Start from the closed_at time
+        let nextOpenTime: Date | null = null;
+
+        if (currentSession.closed_at) {
           let baseTime = new Date(currentSession.closed_at);
           nextOpenTime = timerSystem.calculateNextArenaOpenTime(baseTime);
-          
-          // If the calculated next open time is still in the past, keep adding full cycles until we get a future time
-          const totalCycleMinutes = timerSystem.ARENA_OPEN_DURATION_MINUTES + timerSystem.ARENA_CLOSE_DURATION_MINUTES; // 60 minutes
+
+          const totalCycleMinutes =
+            timerSystem.ARENA_OPEN_DURATION_MINUTES + timerSystem.ARENA_CLOSE_DURATION_MINUTES; // 60
+
           while (nextOpenTime <= now) {
-            // Add a full cycle (60 minutes) to get to the next open window
             baseTime.setMinutes(baseTime.getMinutes() + totalCycleMinutes);
             nextOpenTime = timerSystem.calculateNextArenaOpenTime(baseTime);
           }
-        } else if (!nextOpenTime && currentSession.opened_at) {
-          // Fallback: if no closed_at, use opened_at + close duration + open duration
-          const lastOpen = new Date(currentSession.opened_at);
-          let nextOpen = new Date(lastOpen);
-          const totalCycleMinutes = timerSystem.ARENA_OPEN_DURATION_MINUTES + timerSystem.ARENA_CLOSE_DURATION_MINUTES; // 60 minutes
-          // Add close duration to get to next open time
-          nextOpen.setMinutes(nextOpen.getMinutes() + timerSystem.ARENA_CLOSE_DURATION_MINUTES);
-          
-          // If still in the past, keep adding cycles
-          while (nextOpen <= now) {
-            nextOpen.setMinutes(nextOpen.getMinutes() + totalCycleMinutes);
-          }
-          nextOpenTime = nextOpen;
         }
-        
-        if (nextOpenTime) {
-          const timeUntilOpen = timerSystem.getTimeUntilArenaOpens(nextOpenTime.toISOString());
-          setArenaOpenTimer(timeUntilOpen);
-          
-          // Check if arena should open now (SECONDARY mechanism - backup)
-          // This handles cases where primary mechanism might have failed or session has no ID
-          // Also check actualIsOpen to ensure we're not opening when we shouldn't
-          if (timeUntilOpen <= 0 || actualIsOpen) {
-            // Double-check: if arena is already open according to time, primary mechanism should handle it
-            // But proceed anyway as backup (primary mechanism might have failed or session has no ID)
-            const openedAt = new Date();
-            const closedAt = timerSystem.calculateArenaCloseTime(openedAt);
-            
-            // Get next session number
-            const { data: lastSession } = await supabase
-              .from("arena_sessions")
-              .select("session_number")
-              .order("session_number", { ascending: false })
-              .limit(1)
-              .maybeSingle();
-            
-            const nextSessionNumber = (lastSession?.session_number || 0) + 1;
-            
-            // Update existing session or create new one
-            if (currentSession.id && currentSession.id !== "") {
-              const { error } = await supabase
-                .from("arena_sessions")
-                .update({
-                  is_open: true,
-                  opened_at: openedAt.toISOString(),
-                  closed_at: closedAt.toISOString(),
-                  session_number: nextSessionNumber
-                })
-                .eq("id", currentSession.id);
-              
-              if (error) {
-                console.error("Error updating session to open:", error);
-                // If update fails, try creating a new session instead
-                const { data: newSession, error: createError } = await supabase
-                  .from("arena_sessions")
-                  .insert({
-                    session_number: nextSessionNumber,
-                    opened_at: openedAt.toISOString(),
-                    closed_at: closedAt.toISOString(),
-                    is_open: true
-                  })
-                  .select()
-                  .single();
-                
-                if (!createError && newSession) {
-                  setCurrentSession(newSession);
-                } else {
-                  console.error("Error creating new session:", createError);
-                  await fetchCurrentSession();
-                }
-              } else {
-                await fetchCurrentSession();
-              }
-            } else {
-              // Create new session
-              const { data: newSession, error } = await supabase
-                .from("arena_sessions")
-                .insert({
-                  session_number: nextSessionNumber,
-                  opened_at: openedAt.toISOString(),
-                  closed_at: closedAt.toISOString(),
-                  is_open: true
-                })
-                .select()
-                .single();
-              
-              if (!error && newSession) {
-                setCurrentSession(newSession);
-              } else {
-                await fetchCurrentSession();
-              }
-            }
-          }
-        }
+
+        setArenaOpenTimer(
+          nextOpenTime ? timerSystem.getTimeUntilArenaOpens(nextOpenTime.toISOString()) : 0
+        );
+      }
+
+      if (currentSession.battle_timer_ends_at) {
+        setBattleTimer(timerSystem.getRemainingBattleTimer(currentSession.battle_timer_ends_at));
       }
     };
     
@@ -1844,7 +1690,17 @@ const Arena = () => {
         clearInterval(timerIntervalRef.current);
       }
     };
-  }, [currentSession]);
+  }, [currentSession?.opened_at, currentSession?.closed_at, currentSession?.battle_timer_ends_at]);
+
+  // Periodically refresh the session window from the server (via sync_arena_session),
+  // so timers never depend on an admin client being online.
+  useEffect(() => {
+    if (!userId) return;
+    const interval = setInterval(() => {
+      fetchCurrentSession();
+    }, 15000); // 15s
+    return () => clearInterval(interval);
+  }, [userId]);
   
   // Status Management
   const fetchPlayerStatuses = async (userId: string) => {
