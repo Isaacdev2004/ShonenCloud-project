@@ -73,11 +73,31 @@ const Profile = () => {
       .from("profiles")
       .select("*")
       .eq("id", userId)
-.maybeSingle();
+      .maybeSingle();
 
     if (error) {
       toast.error("Failed to load profile");
     } else {
+      // Auto-correct level if it doesn't match XP (200 XP = +1 level)
+      const xp = Number(data?.xp_points || 0);
+      const expectedLevel = Math.floor(xp / 200) + 1;
+      const isViewingOwn = userId === (user?.id as string | undefined);
+
+      if (data && typeof data.level === "number" && data.level !== expectedLevel) {
+        // For own profile only, correct it in DB to prevent persistent mismatch
+        if (isViewingOwn) {
+          try {
+            await supabase.from("profiles").update({ level: expectedLevel }).eq("id", userId);
+            data.level = expectedLevel;
+          } catch {
+            // ignore
+          }
+        } else {
+          // For other users, display the derived level client-side without writing
+          data.level = expectedLevel;
+        }
+      }
+
       setProfile(data);
       // Ensure profile picture URL has proper format
       let profilePictureValue = data.profile_picture_url || "";

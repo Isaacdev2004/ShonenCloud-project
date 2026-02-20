@@ -107,6 +107,8 @@ const AdminPanel = () => {
     no_use_m: null as number | null,
     atk_boost: 0,
     atk_debuff: 0,
+    self_damage: 0,
+    energy_taken: 0,
   });
   const [newMentor, setNewMentor] = useState({
     name: "",
@@ -648,6 +650,8 @@ const AdminPanel = () => {
         no_use_m: newTechnique.no_use_m || null,
         atk_boost: newTechnique.atk_boost || 0,
         atk_debuff: newTechnique.atk_debuff || 0,
+        self_damage: newTechnique.self_damage || 0,
+        energy_taken: newTechnique.energy_taken || 0,
       });
 
       if (error) throw error;
@@ -681,6 +685,8 @@ const AdminPanel = () => {
         no_use_m: null,
         atk_boost: 0,
         atk_debuff: 0,
+        self_damage: 0,
+        energy_taken: 0,
       });
       fetchTechniques();
     } catch (error: any) {
@@ -729,6 +735,8 @@ const AdminPanel = () => {
           no_use_m: editingTechnique.no_use_m || null,
           atk_boost: editingTechnique.atk_boost || 0,
           atk_debuff: editingTechnique.atk_debuff || 0,
+          self_damage: editingTechnique.self_damage || 0,
+          energy_taken: editingTechnique.energy_taken || 0,
         })
         .eq("id", editingTechnique.id);
 
@@ -2177,6 +2185,26 @@ const AdminPanel = () => {
                     type="number"
                     value={newTechnique.atk_debuff}
                     onChange={(e) => setNewTechnique({...newTechnique, atk_debuff: parseInt(e.target.value) || 0})}
+                    placeholder="0"
+                  />
+                </div>
+                <div>
+                  <Label>Self Damage</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    value={newTechnique.self_damage}
+                    onChange={(e) => setNewTechnique({...newTechnique, self_damage: parseInt(e.target.value) || 0})}
+                    placeholder="0"
+                  />
+                </div>
+                <div>
+                  <Label>Energy Taken</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    value={newTechnique.energy_taken}
+                    onChange={(e) => setNewTechnique({...newTechnique, energy_taken: parseInt(e.target.value) || 0})}
                     placeholder="0"
                   />
                 </div>

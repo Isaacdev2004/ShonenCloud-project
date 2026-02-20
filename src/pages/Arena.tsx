@@ -27,6 +27,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { ZONE_IMAGE_LIST, ZONE_IMAGE_NAMES } from "@/constants/zoneImages";
 import arenaBanner from "@/assets/Banner final (1).png";
+import koImage from "@/assets/K O IMAGE.jpeg";
 // New Arena System Imports
 import * as statusSystem from "@/lib/arena/statusSystem";
 import * as masterySystem from "@/lib/arena/masterySystem";
@@ -200,6 +201,7 @@ const Arena = () => {
   const [lastActionTime, setLastActionTime] = useState<Date | null>(null);
   const [lastTechniqueTime, setLastTechniqueTime] = useState<Date | null>(null);
   const [showZoneSelectDialog, setShowZoneSelectDialog] = useState(false);
+  const [koLockoutExpiry, setKoLockoutExpiry] = useState<Date | null>(null);
   
   // Stats state (using new system)
   const [currentHP, setCurrentHP] = useState(100);
@@ -410,9 +412,17 @@ const Arena = () => {
       // Set current target
       if (data.current_target_id) {
         setCurrentTarget(data.current_target_id);
+        setSelectedZoneTarget(null);
       }
       if (data.is_targeting_zone && data.current_target_zone_id) {
         setSelectedZoneTarget(data.current_target_zone_id);
+        setCurrentTarget(null);
+      }
+      if (!data.current_target_id) {
+        setCurrentTarget(null);
+      }
+      if (!data.is_targeting_zone || !data.current_target_zone_id) {
+        setSelectedZoneTarget(null);
       }
 
       // Check if player has a position, if not create one
@@ -635,7 +645,7 @@ const Arena = () => {
         `Level: ${targetLevel}\n` +
         `Max HP: ${baseMaxHP}\n` +
         `Max ATK: ${baseMaxATK}\n\n` +
-        `This will set current HP/ATK to max, and clear Armor/Aura.`
+        `This will set current HP/ATK to max, clear Armor/Aura, and reset Energy/Mastery to 0.`
     );
     if (!confirmed) return;
 
@@ -649,6 +659,8 @@ const Arena = () => {
         armor: 0,
         aura: 0,
         aura_expires_at: null,
+        energy: 0,
+        mastery: 0,
       })
       .eq("id", targetUserId);
 
@@ -818,7 +830,9 @@ const Arena = () => {
           no_use_e,
           no_use_m,
           atk_boost,
-          atk_debuff
+          atk_debuff,
+          self_damage,
+          energy_taken
         )
       `)
       .eq("user_id", userId);
@@ -938,10 +952,12 @@ const Arena = () => {
   };
 
   const fetchNotifications = async (userId: string) => {
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
     const { data, error } = await supabase
       .from("notifications")
       .select("*")
       .eq("user_id", userId)
+      .gt("created_at", oneHourAgo)
       .order("created_at", { ascending: false })
       .limit(20);
 
@@ -955,6 +971,41 @@ const Arena = () => {
       setUnreadCount(data.filter(n => !n.is_read).length);
     }
   };
+
+  // Auto-clean notifications older than 1 hour
+  useEffect(() => {
+    if (!userId) return;
+
+    const cleanup = async () => {
+      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+      const cutoffMs = Date.now() - 60 * 60 * 1000;
+
+      // Filter state (instant UI cleanup)
+      setNotifications((prev) => {
+        const next = prev.filter((n) => {
+          const t = n?.created_at ? new Date(n.created_at).getTime() : 0;
+          return t > cutoffMs;
+        });
+        setUnreadCount(next.filter((n) => !n.is_read).length);
+        return next;
+      });
+
+      // Best-effort DB cleanup (RLS may block delete; ignore if so)
+      try {
+        await supabase
+          .from("notifications")
+          .delete()
+          .eq("user_id", userId)
+          .lt("created_at", oneHourAgo);
+      } catch {
+        // ignore
+      }
+    };
+
+    cleanup();
+    const interval = setInterval(cleanup, 60 * 1000); // every minute
+    return () => clearInterval(interval);
+  }, [userId]);
 
   const fetchCurrentTarget = async (userId: string) => {
     const { data, error } = await supabase
@@ -980,6 +1031,17 @@ const Arena = () => {
     if (targetUserId === userId) {
       toast({
         title: "Cannot target yourself",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Check if target is in Stasis (can't be targeted)
+    const targetPlayerStatuses = playerStatusesMap[targetUserId] || [];
+    if (targetPlayerStatuses.some(s => s.status === "Stasis" && new Date(s.expires_at) > new Date())) {
+      toast({
+        title: "Cannot Target",
+        description: "This player is in Stasis and cannot be targeted.",
         variant: "destructive",
       });
       return;
@@ -1021,19 +1083,19 @@ const Arena = () => {
       return;
     }
 
-    // Set new target
+    // Set new target (onConflict so upsert updates existing row when user_id already has a target)
     const { error } = await supabase
       .from("player_targets")
-      .upsert({
-        user_id: userId,
-        target_user_id: targetUserId
-      });
+      .upsert(
+        { user_id: userId, target_user_id: targetUserId },
+        { onConflict: "user_id" }
+      );
 
     if (error) {
       console.error("Error setting target:", error);
       toast({
         title: "Error",
-        description: "Failed to set target",
+        description: error.message || "Failed to set target",
         variant: "destructive",
       });
       return;
@@ -1262,8 +1324,9 @@ const Arena = () => {
       if (lastAction && !isStunned) {
         const minutesSinceAction = (now.getTime() - lastAction.getTime()) / 60000;
         if (minutesSinceAction >= 1) {
-          const damage = Math.floor((profile.max_hp || 100) * 0.2);
-          const newHP = Math.max(0, (profile.current_hp || profile.max_hp || 100) - damage);
+          const damage = Math.floor((profile.max_hp ?? 100) * 0.2);
+          // Use ?? instead of || so that 0 HP (K.O.) is preserved, not treated as falsy
+          const newHP = Math.max(0, (profile.current_hp ?? profile.max_hp ?? 100) - damage);
           
           await supabase
             .from("profiles")
@@ -1282,8 +1345,9 @@ const Arena = () => {
       if (lastAttack && !isStunned) {
         const minutesSinceAttack = (now.getTime() - lastAttack.getTime()) / 60000;
         if (minutesSinceAttack >= 4) {
-          const damage = Math.floor((profile.max_hp || 100) * 0.15);
-          const newHP = Math.max(0, (profile.current_hp || profile.max_hp || 100) - damage);
+          const damage = Math.floor((profile.max_hp ?? 100) * 0.15);
+          // Use ?? instead of || so that 0 HP (K.O.) is preserved, not treated as falsy
+          const newHP = Math.max(0, (profile.current_hp ?? profile.max_hp ?? 100) - damage);
           
           await supabase
             .from("profiles")
@@ -1325,6 +1389,63 @@ const Arena = () => {
     const interval = setInterval(checkAura, 10000); // Check every 10 seconds
     return () => clearInterval(interval);
   }, [currentProfile?.aura_expires_at, userId]);
+
+  // K.O. Lockout countdown timer - updates every second for live countdown
+  useEffect(() => {
+    if (!koLockoutExpiry) return;
+    
+    const interval = setInterval(async () => {
+      if (new Date() >= koLockoutExpiry) {
+        // Lockout expired - clean up
+        setKoLockoutExpiry(null);
+        
+        // Remove K.O.Lockout status if still present
+        await supabase
+          .from("player_statuses")
+          .delete()
+          .eq("user_id", userId)
+          .eq("status", "K.O.Lockout");
+        
+        // Reset stats to max values
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("level")
+          .eq("id", userId)
+          .single();
+        
+        const level = profile?.level || 1;
+        const maxHPVal = statsSystem.calculateMaxHP(level);
+        const maxATKVal = statsSystem.calculateMaxATK(level);
+        
+        await supabase
+          .from("profiles")
+          .update({
+            current_hp: maxHPVal,
+            max_hp: maxHPVal,
+            current_atk: maxATKVal,
+            max_atk: maxATKVal,
+            armor: 0,
+            aura: 0,
+            aura_expires_at: null,
+            energy: 0,
+            mastery: 0,
+          })
+          .eq("id", userId);
+        
+        // Refresh profile
+        await fetchProfile(userId);
+        await fetchPlayerStatuses(userId);
+        
+        clearInterval(interval);
+      } else {
+        // Force re-render for countdown update
+        setKoLockoutExpiry(new Date(koLockoutExpiry.getTime()));
+      }
+    }, 1000);
+    
+    return () => clearInterval(interval);
+  }, [koLockoutExpiry, userId]);
+
   useEffect(() => {
     const postsChannel = supabase
       .channel("arena_posts_changes")
@@ -1514,6 +1635,16 @@ const Arena = () => {
   const handleJoinArena = async () => {
     if (!userId || !currentSession) return;
     
+    // Block joining if in K.O. Lockout
+    if (koLockoutExpiry && new Date() < koLockoutExpiry) {
+      toast({
+        title: "K.O. Lockout",
+        description: "You have been killed. You cannot rejoin the Arena yet.",
+        variant: "destructive",
+      });
+      return;
+    }
+    
     if (!timerSystem.isArenaOpen(currentSession.opened_at, currentSession.closed_at)) {
       toast({
         title: "Arena Closed",
@@ -1639,6 +1770,81 @@ const Arena = () => {
       }
       await fetchPlayerPositions();
     }
+    
+    // Send notification to all players in arena
+    const { data: posRows } = await supabase
+      .from("player_positions")
+      .select("user_id");
+    if (posRows && posRows.length > 0) {
+      const uniqueUserIds = Array.from(new Set(posRows.map((p: any) => p.user_id).filter(Boolean)));
+      const joinNotifications = uniqueUserIds
+        .filter(uid => uid !== userId)
+        .map((uid) => ({
+          user_id: uid,
+          message: `${currentProfile?.username || "A member"} joined the Arena`,
+          type: "arena_join",
+        }));
+      if (joinNotifications.length > 0) {
+        await supabase.from("notifications").insert(joinNotifications);
+      }
+    }
+  };
+  
+  const handleExitArena = async () => {
+    if (!userId || !hasJoined) {
+      toast({
+        title: "Error",
+        description: "You are not in the Arena.",
+        variant: "destructive",
+      });
+      return;
+    }
+    
+    // Send notification to all players before removing
+    const { data: posRows } = await supabase
+      .from("player_positions")
+      .select("user_id");
+    if (posRows && posRows.length > 0) {
+      const uniqueUserIds = Array.from(new Set(posRows.map((p: any) => p.user_id).filter(Boolean)));
+      const exitNotifications = uniqueUserIds
+        .filter(uid => uid !== userId)
+        .map((uid) => ({
+          user_id: uid,
+          message: `${currentProfile?.username || "A member"} left the Arena`,
+          type: "arena_exit",
+        }));
+      if (exitNotifications.length > 0) {
+        await supabase.from("notifications").insert(exitNotifications);
+      }
+    }
+    
+    // Remove player from player_positions (disappear from zones)
+    await supabase
+      .from("player_positions")
+      .delete()
+      .eq("user_id", userId);
+    
+    // Remove from arena_participants
+    if (currentSession) {
+      await supabase
+        .from("arena_participants")
+        .delete()
+        .eq("user_id", userId)
+        .eq("session_id", currentSession.id);
+    }
+    
+    // Clear target
+    setCurrentTarget(null);
+    setSelectedZoneTarget(null);
+    setCurrentZone("");
+    setHasJoined(false);
+    
+    await fetchPlayerPositions();
+    
+    toast({
+      title: "Left Arena",
+      description: "You have left the Arena. Click Join to re-enter.",
+    });
   };
   
   // Timer Management
@@ -1726,9 +1932,51 @@ const Arena = () => {
       
       if (data) {
         setPlayerStatuses(data as PlayerStatus[]);
+        
+        // Check for K.O.Lockout status - enforce lockout on page load/refresh
+        const lockout = data.find((s: any) => s.status === "K.O.Lockout" && new Date(s.expires_at) > new Date());
+        if (lockout) {
+          setKoLockoutExpiry(new Date(lockout.expires_at));
+          // Ensure player is removed from arena during lockout
+          if (hasJoined) {
+            setHasJoined(false);
+            setCurrentZone("");
+            // Remove from player_positions if somehow still there
+            supabase.from("player_positions").delete().eq("user_id", userId);
+          }
+        } else {
+          // Check for K.O. status (2-min grace period) - also check if it should have expired
+          const koStatus = data.find((s: any) => s.status === "K.O" && new Date(s.expires_at) <= new Date());
+          if (koStatus) {
+            // K.O. grace period expired without Revival - transition to K.O.Lockout
+            // Remove expired K.O. status
+            supabase.from("player_statuses").delete().eq("id", koStatus.id).then(async () => {
+              const lockoutExpiresAt = new Date();
+              lockoutExpiresAt.setMinutes(lockoutExpiresAt.getMinutes() + 30);
+              
+              await supabase.from("player_statuses").insert({
+                user_id: userId,
+                status: "K.O.Lockout",
+                applied_by_user_id: userId,
+                applied_by_mastery: 0,
+                expires_at: lockoutExpiresAt.toISOString(),
+              });
+              
+              // Remove from arena
+              await supabase.from("player_positions").delete().eq("user_id", userId);
+              setHasJoined(false);
+              setCurrentZone("");
+              setKoLockoutExpiry(lockoutExpiresAt);
+              fetchPlayerPositions();
+            });
+          } else {
+            setKoLockoutExpiry(null);
+          }
+        }
       } else {
         // If no data, set empty array to ensure UI updates
         setPlayerStatuses([]);
+        setKoLockoutExpiry(null);
       }
     } catch (error: any) {
       // Suppress network errors
@@ -2272,6 +2520,28 @@ const Arena = () => {
       return;
     }
 
+    // Enforce global 1-minute action limit across Attack/Move Around/Change Zone/Observe
+    // (server-authoritative using profiles.last_action_at)
+    const { data: lastActionProfile, error: lastActionError } = await supabase
+      .from("profiles")
+      .select("last_action_at")
+      .eq("id", userId)
+      .single();
+
+    if (!lastActionError && lastActionProfile?.last_action_at) {
+      const last = new Date(lastActionProfile.last_action_at);
+      const diffMs = Date.now() - last.getTime();
+      if (diffMs < 60000) {
+        const remaining = Math.ceil((60000 - diffMs) / 1000);
+        toast({
+          title: "Action Limit",
+          description: `You can only use 1 action per minute. ${remaining}s remaining.`,
+          variant: "destructive",
+        });
+        return;
+      }
+    }
+
     // ALWAYS check database first to prevent refresh exploit
     // This ensures we have the latest cooldown state from the database
     const { data: cooldownData, error: cooldownError } = await supabase
@@ -2355,15 +2625,15 @@ const Arena = () => {
     // Calculate damage
     let damage = currentATK;
     
-    // If targeting zone and is Emperor, damage is halved
-    if (selectedZoneTarget && currentProfile.discipline === "Emperor") {
-      damage = Math.floor(damage / 2);
+    // If targeting zone, damage is 50% of ATK (rounded)
+    if (selectedZoneTarget) {
+      damage = Math.round(damage / 2);
     }
     
     // Apply damage to target(s)
     if (selectedZoneTarget) {
-      // Zone targeting - affect all players in zone
-      const playersInZone = getPlayersInZone(selectedZoneTarget);
+      // Zone targeting - affect all players in zone EXCEPT the attacker
+      const playersInZone = getPlayersInZone(selectedZoneTarget).filter(p => p.user_id !== userId);
       for (const player of playersInZone) {
         await applyDamageToPlayer(player.user_id, damage, "attack");
       }
@@ -2503,7 +2773,8 @@ const Arena = () => {
       user_id: userId,
       action_type: "attack",
       description: battleFeedDescription,
-      zone_id: currentZone,
+      // Use the targeted zone if zone targeting, otherwise attacker's current zone
+      zone_id: selectedZoneTarget || currentZone,
     };
     
     // Try with target_user_id first (only if we have a target)
@@ -2630,12 +2901,67 @@ const Arena = () => {
         return;
       }
       
-      const result = statsSystem.applyDamage(
-        damage,
-        target.current_hp || target.max_hp || 100,
-        target.armor || 0,
-        target.aura || 0
-      );
+      // Check target's statuses for immunity
+      const { data: targetStatuses } = await supabase
+        .from("player_statuses")
+        .select("status")
+        .eq("user_id", targetUserId)
+        .gt("expires_at", new Date().toISOString());
+      
+      const targetActiveStatuses = (targetStatuses || []).map((s: any) => s.status);
+      
+      // Stasis: target is immune to all damage
+      if (statusSystem.statusIsImmune(targetActiveStatuses)) {
+        return;
+      }
+      
+      // Check attacker statuses for Lethal/Reaping
+      const attackerStatuses = playerStatuses.map(s => s.status);
+      const hasReaping = statusSystem.attackIgnoresEverything(attackerStatuses);
+      const hasLethal = statusSystem.attackBypassesDefenses(attackerStatuses);
+      
+      // Shielded: no HP/Armor/Aura loss at all (Reaping bypasses Shielded)
+      if (targetActiveStatuses.includes("Shielded") && !hasReaping) {
+        const targetPlayer = playerPositions.find(p => p.user_id === targetUserId);
+        const targetName = targetPlayer?.profiles?.username || "Target";
+        toast({
+          title: "No Damage Dealt",
+          description: `${targetName} is Shielded!`,
+        });
+        return;
+      }
+      
+      // Airborne/Underground: can only be hit by FOCUSED attacker (handled here for basic attacks)
+      if ((targetActiveStatuses.includes("Airborne") || targetActiveStatuses.includes("Underground")) && !attackerStatuses.includes("Focused")) {
+        const targetPlayer = playerPositions.find(p => p.user_id === targetUserId);
+        const targetName = targetPlayer?.profiles?.username || "Target";
+        toast({
+          title: "Attack Missed",
+          description: `${targetName} is ${targetActiveStatuses.includes("Airborne") ? "Airborne" : "Underground"}! You need Focused status to hit them.`,
+        });
+        return;
+      }
+      
+      let result;
+      if (hasReaping && !targetActiveStatuses.includes("Stasis")) {
+        // Reaping: ignore Armor, Aura, AND Shielded - direct HP damage
+        const currentHP = target.current_hp ?? target.max_hp ?? 100;
+        const newHP = Math.max(0, currentHP - damage);
+        result = { newHP, newArmor: target.armor ?? 0, newAura: target.aura ?? 0 };
+      } else if (hasLethal) {
+        // Lethal: bypass Armor and Aura, direct HP damage
+        const currentHP = target.current_hp ?? target.max_hp ?? 100;
+        const newHP = Math.max(0, currentHP - damage);
+        result = { newHP, newArmor: target.armor ?? 0, newAura: target.aura ?? 0 };
+      } else {
+        // Normal damage: goes through Aura -> Armor -> HP
+        result = statsSystem.applyDamage(
+          damage,
+          target.current_hp ?? target.max_hp ?? 100,
+          target.armor ?? 0,
+          target.aura ?? 0
+        );
+      }
       
       // Update target stats
       const { error: updateError } = await supabase
@@ -2680,9 +3006,10 @@ const Arena = () => {
   };
   
   const applyKOStatus = async (targetUserId: string) => {
-    const duration = statusSystem.calculateStatusDuration(2, "K.O");
+    // K.O. grace period: 2 minutes to use a Revival technique
+    const gracePeriodMinutes = 2;
     const expiresAt = new Date();
-    expiresAt.setMinutes(expiresAt.getMinutes() + duration);
+    expiresAt.setMinutes(expiresAt.getMinutes() + gracePeriodMinutes);
     
     await supabase.from("player_statuses").insert({
       user_id: targetUserId,
@@ -2692,21 +3019,121 @@ const Arena = () => {
       expires_at: expiresAt.toISOString(),
     });
     
-    // Set timer for removal if no Revival used
+    // Get K.O'd player's username for notification
+    const koPlayer = playerPositions.find(p => p.user_id === targetUserId);
+    const koUsername = koPlayer?.profiles?.username || "A player";
+    
+    // Send notification to all players in arena
+    const { data: posRows } = await supabase
+      .from("player_positions")
+      .select("user_id")
+      .not("user_id", "is", null);
+    
+    if (posRows && posRows.length > 0) {
+      const uniqueUserIds = Array.from(new Set(posRows.map((p: any) => p.user_id).filter(Boolean)));
+      const notificationRows = uniqueUserIds.map((uid) => ({
+        user_id: uid,
+        message: `${koUsername} is K.O!`,
+        type: "ko_alert",
+      }));
+      await supabase.from("notifications").insert(notificationRows);
+    }
+    
+    // After 2 minutes, check if still K.O'd (no Revival used)
     setTimeout(async () => {
-      const { data: statuses } = await supabase
+      // Check if K.O. status still exists (Revival would have deleted it)
+      const { data: koStatus } = await supabase
         .from("player_statuses")
         .select("id")
         .eq("user_id", targetUserId)
         .eq("status", "K.O")
-        .gt("expires_at", new Date().toISOString())
         .maybeSingle();
       
-      if (statuses) {
-        // Still K.O, remove from Arena
-        await supabase.from("player_positions").delete().eq("user_id", targetUserId);
+      if (koStatus) {
+        // Still K.O'd - no Revival was used
+        // Remove the K.O status and apply K.O.Lockout for 30 minutes
+        await supabase.from("player_statuses").delete().eq("id", koStatus.id);
+        
+        const lockoutExpiresAt = new Date();
+        lockoutExpiresAt.setMinutes(lockoutExpiresAt.getMinutes() + 30);
+        
+        await supabase.from("player_statuses").insert({
+          user_id: targetUserId,
+          status: "K.O.Lockout",
+          applied_by_user_id: userId || null,
+          applied_by_mastery: 0,
+          expires_at: lockoutExpiresAt.toISOString(),
+        });
+        
+        // Kick the player out of the Arena (remove from player_positions)
+        // They disappear from zones and must click "Join Arena" again after lockout
+        await supabase
+          .from("player_positions")
+          .delete()
+          .eq("user_id", targetUserId);
+        
+        // Also remove from arena_participants so they need to rejoin
+        if (currentSession?.id) {
+          await supabase
+            .from("arena_participants")
+            .delete()
+            .eq("user_id", targetUserId)
+            .eq("session_id", currentSession.id);
+        }
+        
+        // If the kicked player is the current user, update local state
+        if (targetUserId === userId) {
+          setHasJoined(false);
+          setCurrentZone("");
+        }
+        
+        // Refresh player positions so everyone sees the player disappear
+        fetchPlayerPositions();
+        
+        // After 30 minutes, reset their stats to max and allow them to play again
+        setTimeout(async () => {
+          // Check if K.O.Lockout is still active (wasn't manually removed)
+          const { data: lockoutStatus } = await supabase
+            .from("player_statuses")
+            .select("id")
+            .eq("user_id", targetUserId)
+            .eq("status", "K.O.Lockout")
+            .maybeSingle();
+          
+          if (lockoutStatus) {
+            // Remove K.O.Lockout status
+            await supabase.from("player_statuses").delete().eq("id", lockoutStatus.id);
+            
+            // Get user's level to calculate max stats
+            const { data: profile } = await supabase
+              .from("profiles")
+              .select("level")
+              .eq("id", targetUserId)
+              .single();
+            
+            const level = profile?.level || 1;
+            const maxHP = statsSystem.calculateMaxHP(level);
+            const maxATK = statsSystem.calculateMaxATK(level);
+            
+            // Reset stats to max values (HP/ATK to max, Armor/Aura/Energy/M to 0)
+            await supabase
+              .from("profiles")
+              .update({
+                current_hp: maxHP,
+                max_hp: maxHP,
+                current_atk: maxATK,
+                max_atk: maxATK,
+                armor: 0,
+                aura: 0,
+                aura_expires_at: null,
+                energy: 0,
+                mastery: 0,
+              })
+              .eq("id", targetUserId);
+          }
+        }, 30 * 60 * 1000); // 30 minutes
       }
-    }, 60000); // 1 minute
+    }, gracePeriodMinutes * 60 * 1000); // 2 minutes
   };
   
   const handleMoveAround = async () => {
@@ -2724,6 +3151,17 @@ const Arena = () => {
       toast({
         title: "Loading",
         description: "Please wait while cooldowns are being loaded...",
+        variant: "destructive",
+      });
+      return;
+    }
+    
+    // Check if status blocks actions (Stunned, K.O, Grounded, Stasis)
+    const moveAroundStatuses = playerStatuses.map(s => s.status);
+    if (statusSystem.statusBlocksActions(moveAroundStatuses)) {
+      toast({
+        title: "Cannot Move Around",
+        description: "You cannot perform actions with your current status effect.",
         variant: "destructive",
       });
       return;
@@ -2760,10 +3198,16 @@ const Arena = () => {
     let description = result.description;
     
     if (result.effect.type === "energy") {
-      const newEnergy = (energy || 0) + (result.effect.value || 0);
-      setEnergy(newEnergy);
-      await supabase.from("profiles").update({ energy: newEnergy }).eq("id", userId);
-      description += ` (+${result.effect.value} Energy)`;
+      const moveStatuses = playerStatuses.map(s => s.status);
+      const moveGains = statusSystem.statusPreventsGain(moveStatuses);
+      if (moveGains.energy) {
+        description += ` (Energy gain blocked - Weakened!)`;
+      } else {
+        const newEnergy = (energy || 0) + (result.effect.value || 0);
+        setEnergy(newEnergy);
+        await supabase.from("profiles").update({ energy: newEnergy }).eq("id", userId);
+        description += ` (+${result.effect.value} Energy)`;
+      }
     } else if (result.effect.type === "aura") {
       const auraAmount = Math.floor((maxHP * (result.effect.percentage || 0)) / 100);
       const expiresAt = statsSystem.calculateAuraExpiration();
@@ -2777,10 +3221,16 @@ const Arena = () => {
         .eq("id", userId);
       description += ` (+${auraAmount} Aura for 2 minutes)`;
     } else if (result.effect.type === "armor") {
-      const newArmor = (armor || 0) + (result.effect.value || 0);
-      setArmor(newArmor);
-      await supabase.from("profiles").update({ armor: newArmor }).eq("id", userId);
-      description += ` (+${result.effect.value} Armor)`;
+      const moveStatuses = playerStatuses.map(s => s.status);
+      const moveGains = statusSystem.statusPreventsGain(moveStatuses);
+      if (moveGains.armor) {
+        description += ` (Armor gain blocked - Weakened!)`;
+      } else {
+        const newArmor = (armor || 0) + (result.effect.value || 0);
+        setArmor(newArmor);
+        await supabase.from("profiles").update({ armor: newArmor }).eq("id", userId);
+        description += ` (+${result.effect.value} Armor)`;
+      }
     } else if (result.effect.type === "mastery") {
       const newMastery = masterySystem.capMastery(mastery + (result.effect.value || 0));
       setMastery(newMastery);
@@ -2826,8 +3276,62 @@ const Arena = () => {
       // Use Mastery based on discipline
       const effect = masterySystem.getMasteryEffect(currentProfile?.discipline as any, mastery);
       if (effect) {
-        // Apply mastery effect
-        description += ` (Used ${Math.floor(mastery)} Mastery: ${currentProfile?.discipline} effect)`;
+        const wholeMastery = Math.floor(mastery);
+        
+        if (effect.type === "status" && effect.statuses) {
+          // Apply each status (e.g., All-Seeing applies FOCUSED + LETHAL)
+          for (const statusName of effect.statuses) {
+            const duration = effect.duration || wholeMastery;
+            const expiresAt = new Date();
+            expiresAt.setMinutes(expiresAt.getMinutes() + duration);
+            
+            await supabase.from("player_statuses").insert({
+              user_id: userId,
+              status: statusName,
+              applied_by_user_id: userId,
+              applied_by_mastery: mastery,
+              expires_at: expiresAt.toISOString(),
+            });
+          }
+          description += ` (Applied ${effect.statuses.join(" + ")} for ${effect.duration}min)`;
+        } else if (effect.type === "armor" && effect.target === "self") {
+          const newArmor = (armor || 0) + effect.value;
+          setArmor(newArmor);
+          await supabase.from("profiles").update({ armor: newArmor }).eq("id", userId);
+          description += ` (+${effect.value} Armor)`;
+        } else if (effect.type === "heal" && effect.target === "self") {
+          const newHP = statsSystem.applyHeal(effect.value, currentHP, maxHP);
+          setCurrentHP(newHP);
+          await supabase.from("profiles").update({ current_hp: newHP }).eq("id", userId);
+          description += ` (+${effect.value} HP healed)`;
+        } else if (effect.type === "damage" && effect.target === "target" && currentTarget) {
+          await applyDamageToPlayer(currentTarget, effect.value, "mastery");
+          description += ` (${effect.value} damage to target)`;
+        } else if (effect.type === "damage" && effect.target === "zone") {
+          const playersInZone = getPlayersInZone(selectedZoneTarget || currentZone).filter(p => p.user_id !== userId);
+          for (const player of playersInZone) {
+            await applyDamageToPlayer(player.user_id, effect.value, "mastery");
+          }
+          description += ` (${effect.value} damage to zone)`;
+        } else if (effect.type === "hidden") {
+          // Shadow: apply Hidden status
+          const expiresAt = new Date();
+          expiresAt.setMinutes(expiresAt.getMinutes() + (effect.duration || wholeMastery));
+          await supabase.from("player_statuses").insert({
+            user_id: userId,
+            status: "Hidden",
+            applied_by_user_id: userId,
+            applied_by_mastery: mastery,
+            expires_at: expiresAt.toISOString(),
+          });
+          description += ` (Hidden for ${effect.duration || wholeMastery}min)`;
+        }
+        
+        // Consume all mastery after using M-key effect
+        setMastery(0);
+        await supabase.from("profiles").update({ mastery: 0 }).eq("id", userId);
+        
+        await fetchPlayerStatuses(userId);
       }
     }
     
@@ -2846,6 +3350,9 @@ const Arena = () => {
       .from("profiles")
       .update({ last_action_at: now.toISOString() })
       .eq("id", userId);
+
+    // Update local state too (prevents Attack bypass after Move Around)
+    setLastActionTime(now);
     
     toast({
       title: "Move Around",
@@ -2868,6 +3375,17 @@ const Arena = () => {
       toast({
         title: "Loading",
         description: "Please wait while cooldowns are being loaded...",
+        variant: "destructive",
+      });
+      return;
+    }
+    
+    // Check if status blocks actions (Stunned, K.O, Grounded, Stasis)
+    const observeStatuses = playerStatuses.map(s => s.status);
+    if (statusSystem.statusBlocksActions(observeStatuses)) {
+      toast({
+        title: "Cannot Observe",
+        description: "You cannot perform actions with your current status effect.",
         variant: "destructive",
       });
       return;
@@ -3036,6 +3554,17 @@ const Arena = () => {
       toast({
         title: "Error",
         description: "You must be logged in to change zones",
+        variant: "destructive",
+      });
+      return;
+    }
+    
+    // Block zone change if Stunned, K.O, Grounded, Stasis, etc.
+    const currentStatuses = playerStatuses.map(s => s.status);
+    if (statusSystem.statusBlocksZoneChange(currentStatuses)) {
+      toast({
+        title: "Cannot Change Zone",
+        description: "You cannot change zones while affected by a status effect.",
         variant: "destructive",
       });
       return;
@@ -3297,14 +3826,25 @@ const Arena = () => {
       return;
     }
     
-    // Check action limit (1 action + 1 technique per minute)
-    if (lastTechniqueTime && new Date().getTime() - lastTechniqueTime.getTime() < 60000) {
-      toast({
-        title: "Action Limit",
-        description: "You can only use 1 technique per minute",
-        variant: "destructive",
-      });
-      return;
+    // Check action limit (1 technique per minute) - server-authoritative
+    const { data: techCooldownProfile } = await supabase
+      .from("profiles")
+      .select("last_technique_at")
+      .eq("id", userId)
+      .single();
+    
+    if (techCooldownProfile?.last_technique_at) {
+      const lastTech = new Date(techCooldownProfile.last_technique_at);
+      const diffMs = Date.now() - lastTech.getTime();
+      if (diffMs < 60000) {
+        const remaining = Math.ceil((60000 - diffMs) / 1000);
+        toast({
+          title: "Action Limit",
+          description: `You can only use 1 technique per minute. Wait ${remaining}s.`,
+          variant: "destructive",
+        });
+        return;
+      }
     }
     
     // Get technique data (use cached or fetch)
@@ -3344,18 +3884,7 @@ const Arena = () => {
       });
     }
     
-    // Check if user can use technique (status checks)
-    const activeStatuses = playerStatuses.map(s => s.status);
-    if (statusSystem.statusBlocksTechniques(activeStatuses)) {
-      toast({
-        title: "Cannot Use Technique",
-        description: "You are stunned, silenced, or K.O'd",
-        variant: "destructive",
-      });
-      return;
-    }
-    
-    // Handle tags - can be array or comma-separated string
+    // Handle tags - can be array or comma-separated string (need tags first for K.O. Revival check)
     let tags: string[] = [];
     if (Array.isArray(techniqueData.tags)) {
       tags = techniqueData.tags;
@@ -3363,6 +3892,43 @@ const Arena = () => {
       tags = techniqueData.tags.split(",").map(t => t.trim());
     } else if (techniqueData.type_info) {
       tags = techniqueData.type_info.split(",").map(t => t.trim());
+    }
+    
+    // Check if user can use technique (status checks)
+    const activeStatuses = playerStatuses.map(s => s.status);
+    const isKOStatus = activeStatuses.includes("K.O");
+    const isKOLockout = activeStatuses.includes("K.O.Lockout");
+    const isRevivalTechnique = tags.some(t => t.toLowerCase() === "revival");
+    
+    // K.O.Lockout blocks ALL techniques (no Revival allowed)
+    if (isKOLockout) {
+      toast({
+        title: "Cannot Use Technique",
+        description: "You are in K.O. Lockout and cannot perform any actions.",
+        variant: "destructive",
+      });
+      return;
+    }
+    
+    // K.O status allows ONLY Revival techniques
+    if (isKOStatus) {
+      if (!isRevivalTechnique) {
+        toast({
+          title: "Cannot Use Technique",
+          description: "You are K.O'd! Only Revival techniques can be used.",
+          variant: "destructive",
+        });
+        return;
+      }
+      // Revival technique during K.O - allow it to proceed
+    } else if (statusSystem.statusBlocksTechniques(activeStatuses)) {
+      // Normal status blocking (Stunned, Silenced, etc.)
+      toast({
+        title: "Cannot Use Technique",
+        description: "You are stunned or silenced.",
+        variant: "destructive",
+      });
+      return;
     }
     
     // Check battle timer phase (SETUP/COMBO only in first 30s)
@@ -3380,7 +3946,7 @@ const Arena = () => {
     
     // Check energy cost
     const energyCost = techniqueData.energy_cost || 0;
-    if (energy > 0 && energy < energyCost) {
+    if (energyCost > 0 && energy < energyCost) {
       toast({
         title: "Not enough Energy",
         description: `This technique requires ${energyCost} Energy`,
@@ -3389,11 +3955,21 @@ const Arena = () => {
       return;
     }
     
-    // Check mastery requirements
+    // Check mastery requirements (no_use_m = minimum M needed to use)
     if (techniqueData.no_use_m && mastery < techniqueData.no_use_m) {
       toast({
         title: "Insufficient Mastery",
         description: `This technique requires ${techniqueData.no_use_m} Mastery`,
+        variant: "destructive",
+      });
+      return;
+    }
+    
+    // Check energy requirements (no_use_e = minimum Energy needed to use)
+    if (techniqueData.no_use_e && energy < techniqueData.no_use_e) {
+      toast({
+        title: "Insufficient Energy",
+        description: `This technique requires ${techniqueData.no_use_e} Energy`,
         variant: "destructive",
       });
       return;
@@ -3461,29 +4037,42 @@ const Arena = () => {
       return;
     }
     
-    // Check if technique blocks specific tags
-    if (statusSystem.statusBlocksTechniqueTag(activeStatuses, "Movement") && tags.includes("Movement")) {
-      toast({
-        title: "Cannot Use",
-        description: "You cannot use Movement techniques while Unwell",
-        variant: "destructive",
-      });
-      return;
+    // Check if any active status blocks a specific technique tag
+    for (const tag of tags) {
+      if (statusSystem.statusBlocksTechniqueTag(activeStatuses, tag)) {
+        const statusReasons: string[] = [];
+        if (activeStatuses.includes("Unwell") && tag.toLowerCase() === "movement") statusReasons.push("Unwell blocks Movement");
+        if (activeStatuses.includes("Shrouded") && (tag.toLowerCase() === "ranged" || tag.toLowerCase() === "aoe")) statusReasons.push("Shrouded blocks Ranged/AOE");
+        if (activeStatuses.includes("Launched Up") && tag.toLowerCase() === "defensive") statusReasons.push("Launched Up blocks Defensive");
+        if (activeStatuses.includes("Bleeding") && (tag.toLowerCase() === "buff" || tag.toLowerCase() === "revival")) statusReasons.push("Bleeding blocks Buff/Revival");
+        if (activeStatuses.includes("Chaos-affected") && (tag.toLowerCase() === "combo" || tag.toLowerCase() === "setup")) statusReasons.push("Chaos-Affected blocks Combo/Setup");
+        
+        toast({
+          title: "Cannot Use Technique",
+          description: statusReasons.length > 0 ? statusReasons[0] : `You cannot use ${tag} techniques with your current status.`,
+          variant: "destructive",
+        });
+        return;
+      }
     }
     
     // Determine target(s)
+    const hasGlobalTag = tags.some(t => t.toLowerCase() === "global");
     let targets: string[] = [];
-    if (selectedZoneTarget && (tags.includes("Global") || currentProfile?.discipline === "Emperor")) {
-      // Zone targeting - get all players in zone
+    if (selectedZoneTarget && (hasGlobalTag || currentProfile?.discipline === "Emperor")) {
+      // Zone targeting with Global tag or Emperor - get all players in zone
       const playersInZone = getPlayersInZone(selectedZoneTarget);
       targets = playersInZone.map(p => p.user_id);
     } else if (currentTarget) {
       // Single target
       targets = [currentTarget];
-    } else if (tags.includes("Global")) {
-      // Global technique - all players in current zone
+    } else if (hasGlobalTag) {
+      // Global technique without zone target - all players in current zone
       const playersInZone = getPlayersInZone(currentZone);
       targets = playersInZone.map(p => p.user_id);
+    } else if (isRevivalTechnique) {
+      // Revival techniques are self-targeting, no target needed
+      targets = [];
     } else {
       toast({
         title: "No Target",
@@ -3512,14 +4101,36 @@ const Arena = () => {
       
       const targetActiveStatuses = (targetStatuses || []).map(s => s.status);
       
+      // Stasis: complete immunity - can't be targeted, techniques don't affect them
+      if (statusSystem.statusIsImmune(targetActiveStatuses)) {
+        if (targets.length === 1) {
+          toast({
+            title: "Target is in Stasis",
+            description: "This target is in Stasis and cannot be affected by any technique.",
+            variant: "destructive",
+          });
+        }
+        continue;
+      }
+      
       // Check if target can be hit
-      if (targetActiveStatuses.includes("Hidden") && !tags.includes("Aoe") && !tags.includes("Setup")) {
+      if (targetActiveStatuses.includes("Hidden") && !tags.some(t => t.toLowerCase() === "aoe") && !tags.some(t => t.toLowerCase() === "setup")) {
         continue; // Skip hidden targets unless AOE/SETUP
       }
       
       if (targetActiveStatuses.includes("Airborne") || targetActiveStatuses.includes("Underground")) {
-        if (!statusSystem.canHitAirborneUnderground(activeStatuses) && !tags.includes("Aoe") && !tags.includes("Global")) {
-          continue; // Skip airborne/underground unless FOCUSED or AOE/GLOBAL
+        const hasAOETag = tags.some(t => t.toLowerCase() === "aoe");
+        const hasGlobalTagForCheck = tags.some(t => t.toLowerCase() === "global");
+        if (!statusSystem.canHitAirborneUnderground(activeStatuses) && !hasAOETag && !hasGlobalTagForCheck) {
+          if (targets.length === 1) {
+            const evadingStatus = targetActiveStatuses.includes("Airborne") ? "Airborne" : "Underground";
+            toast({
+              title: "Technique Missed",
+              description: `Target is ${evadingStatus}! Only FOCUSED attackers or Global/AOE techniques can hit them.`,
+              variant: "destructive",
+            });
+          }
+          continue;
         }
       }
       
@@ -3533,8 +4144,23 @@ const Arena = () => {
       }
       
       if (techniqueData.specific_status_hit && !targetActiveStatuses.includes(techniqueData.specific_status_hit)) {
-        continue; // Skip if target doesn't have required status
+        // If single target, show an error
+        if (targets.length === 1) {
+          toast({
+            title: "Cannot Hit Target",
+            description: `This technique only hits targets with "${techniqueData.specific_status_hit}" status.`,
+            variant: "destructive",
+          });
+        }
+        continue;
       }
+      
+      // Check attacker status effects for damage bypass
+      const attackerHasReaping = statusSystem.attackIgnoresEverything(activeStatuses);
+      const attackerHasLethal = statusSystem.attackBypassesDefenses(activeStatuses);
+      
+      // Shielded: no HP/Armor/Aura loss at all (Reaping bypasses Shielded)
+      const targetIsShielded = targetActiveStatuses.includes("Shielded");
       
       // Calculate damage with multipliers
       let damage = techniqueData.damage || 0;
@@ -3546,19 +4172,46 @@ const Arena = () => {
       damage = Math.floor(damage * damageMultiplier);
       
       // Setup tag: 1.5x damage to Aura
-      if (tags.includes("Setup") && targetProfile?.aura) {
+      if (tags.some(t => t.toLowerCase() === "setup") && targetProfile?.aura) {
         damage = Math.floor(damage * 1.5);
+      }
+      
+      // Shielded blocks all damage unless attacker has Reaping
+      if (targetIsShielded && !attackerHasReaping) {
+        damage = 0;
+        armorDamage = 0;
+        auraDamage = 0;
+        if (targets.length === 1) {
+          const shieldedPlayer = playerPositions.find(p => p.user_id === targetId);
+          const shieldedName = shieldedPlayer?.profiles?.username || "Target";
+          toast({
+            title: "No Damage Dealt",
+            description: `${shieldedName} is Shielded! No damage was dealt.`,
+          });
+        }
       }
       
       // Apply damage
       if (damage > 0) {
-        // Check if damage is ignored
-        if (!statusSystem.statusIgnoresDamage(targetActiveStatuses) || tags.includes("Aoe") || tags.includes("Global")) {
+        if (attackerHasReaping || attackerHasLethal) {
+          // Lethal/Reaping: bypass Armor and Aura, deal direct HP damage
+          const currentHP = targetProfile?.current_hp ?? targetProfile?.max_hp ?? 100;
+          const newHP = Math.max(0, currentHP - damage);
+          await supabase
+            .from("profiles")
+            .update({ current_hp: newHP })
+            .eq("id", targetId);
+          
+          if (newHP === 0) {
+            await applyKOStatus(targetId);
+          }
+        } else {
+          // Normal damage pipeline: Aura -> Armor -> HP
           const result = statsSystem.applyDamage(
             damage,
-            targetProfile?.current_hp || targetProfile?.max_hp || 100,
-            targetProfile?.armor || 0,
-            targetProfile?.aura || 0
+            targetProfile?.current_hp ?? targetProfile?.max_hp ?? 100,
+            targetProfile?.armor ?? 0,
+            targetProfile?.aura ?? 0
           );
           
           await supabase
@@ -3570,7 +4223,6 @@ const Arena = () => {
             })
             .eq("id", targetId);
           
-          // Check for K.O
           if (result.newHP === 0) {
             await applyKOStatus(targetId);
           }
@@ -3596,8 +4248,9 @@ const Arena = () => {
       }
       
       // Apply ATK debuff
-      if (techniqueData.atk_debuff) {
-        const newATK = Math.max(0, (targetProfile?.current_atk || targetProfile?.max_atk || 20) - techniqueData.atk_debuff);
+      if (techniqueData.atk_debuff && techniqueData.atk_debuff > 0) {
+        const currentTargetATK = targetProfile?.current_atk ?? targetProfile?.max_atk ?? 20;
+        const newATK = Math.max(0, currentTargetATK - techniqueData.atk_debuff);
         await supabase
           .from("profiles")
           .update({ current_atk: newATK })
@@ -3610,6 +4263,16 @@ const Arena = () => {
         await supabase
           .from("profiles")
           .update({ mastery: newMastery })
+          .eq("id", targetId);
+      }
+      
+      // Apply Energy taken
+      if (techniqueData.energy_taken && techniqueData.energy_taken > 0) {
+        const currentTargetEnergy = targetProfile?.energy || 0;
+        const newTargetEnergy = Math.max(0, currentTargetEnergy - techniqueData.energy_taken);
+        await supabase
+          .from("profiles")
+          .update({ energy: newTargetEnergy })
           .eq("id", targetId);
       }
       
@@ -3626,6 +4289,19 @@ const Arena = () => {
           applied_by_mastery: mastery,
           expires_at: expiresAt.toISOString(),
         });
+        
+        // Launched Up: target loses 0.5 M
+        if (techniqueData.opponent_status === "Launched Up") {
+          const newTargetMastery = Math.max(0, (targetProfile?.mastery || 0) - 0.5);
+          await supabase.from("profiles").update({ mastery: newTargetMastery }).eq("id", targetId);
+        }
+        
+        // Weakened: target loses 4 ATK
+        if (techniqueData.opponent_status === "Weakened") {
+          const currentTargetATK = targetProfile?.current_atk ?? targetProfile?.max_atk ?? 20;
+          const newATK = Math.max(0, currentTargetATK - 4);
+          await supabase.from("profiles").update({ current_atk: newATK }).eq("id", targetId);
+        }
       }
     }
     
@@ -3644,14 +4320,19 @@ const Arena = () => {
       }
     }
     
-    // Armor given
+    // Armor given (blocked by Weakened)
     if (techniqueData.armor_given) {
-      const newArmor = (armor || 0) + techniqueData.armor_given;
-      setArmor(newArmor);
-      await supabase
-        .from("profiles")
-        .update({ armor: newArmor })
-        .eq("id", userId);
+      const gains = statusSystem.statusPreventsGain(activeStatuses);
+      if (gains.armor) {
+        toast({ title: "Weakened", description: "You cannot gain Armor while Weakened." });
+      } else {
+        const newArmor = (armor || 0) + techniqueData.armor_given;
+        setArmor(newArmor);
+        await supabase
+          .from("profiles")
+          .update({ armor: newArmor })
+          .eq("id", userId);
+      }
     }
     
     // Given Aura (always lasts 2 minutes)
@@ -3667,14 +4348,19 @@ const Arena = () => {
         .eq("id", userId);
     }
     
-    // Energy given
+    // Energy given (blocked by Weakened)
     if (techniqueData.energy_given) {
-      const newEnergy = (energy || 0) + techniqueData.energy_given;
-      setEnergy(newEnergy);
-      await supabase
-        .from("profiles")
-        .update({ energy: newEnergy })
-        .eq("id", userId);
+      const gains = statusSystem.statusPreventsGain(activeStatuses);
+      if (gains.energy) {
+        toast({ title: "Weakened", description: "You cannot gain Energy while Weakened." });
+      } else {
+        const newEnergy = (energy || 0) + techniqueData.energy_given;
+        setEnergy(newEnergy);
+        await supabase
+          .from("profiles")
+          .update({ energy: newEnergy })
+          .eq("id", userId);
+      }
     }
     
     // ATK boost
@@ -3713,6 +4399,21 @@ const Arena = () => {
       
       // Refresh statuses
       await fetchPlayerStatuses(userId);
+    }
+    
+    // Self damage: deal direct HP damage to self (ignores Armor/Aura)
+    if (techniqueData.self_damage && techniqueData.self_damage > 0) {
+      const selfDmg = techniqueData.self_damage;
+      const newSelfHP = Math.max(0, currentHP - selfDmg);
+      setCurrentHP(newSelfHP);
+      await supabase
+        .from("profiles")
+        .update({ current_hp: newSelfHP })
+        .eq("id", userId);
+      
+      if (newSelfHP === 0) {
+        await applyKOStatus(userId);
+      }
     }
     
     // Deduct energy cost
@@ -3772,6 +4473,40 @@ const Arena = () => {
       .from("profiles")
       .update({ last_technique_at: now.toISOString() })
       .eq("id", userId);
+    
+    // If the player was K.O'd and used a Revival technique, remove K.O. status (they come back alive)
+    if (isKOStatus && isRevivalTechnique) {
+      // Remove the K.O status from the database
+      await supabase
+        .from("player_statuses")
+        .delete()
+        .eq("user_id", userId)
+        .eq("status", "K.O");
+      
+      // Refresh statuses so K.O. image is removed and normal profile pic shows
+      await fetchPlayerStatuses(userId);
+      
+      // Notify all players that this player has been revived
+      const { data: posRows } = await supabase
+        .from("player_positions")
+        .select("user_id")
+        .not("user_id", "is", null);
+      
+      if (posRows && posRows.length > 0) {
+        const uniqueUserIds = Array.from(new Set(posRows.map((p: any) => p.user_id).filter(Boolean)));
+        const reviveNotifications = uniqueUserIds.map((uid) => ({
+          user_id: uid,
+          message: `${currentProfile?.username || "A player"} has been revived!`,
+          type: "revival",
+        }));
+        await supabase.from("notifications").insert(reviveNotifications);
+      }
+      
+      toast({
+        title: "Revived!",
+        description: "You used a Revival technique and are back in the fight!",
+      });
+    }
     
     // Add to battle feed
     // Try with target_user_id first, fallback without it if the column isn't deployed on the live DB yet.
@@ -3876,11 +4611,11 @@ const Arena = () => {
     setShowActionDialog(false);
     setSelectedTechnique(null);
     
-    // Refresh data
-    fetchProfile(userId);
-    fetchPlayerPositions();
-    fetchPlayerStatuses(userId);
-    fetchCooldowns(userId);
+    // Refresh data - await to ensure UI reflects changes (ATK boost/debuff, HP, etc.)
+    await fetchProfile(userId);
+    await fetchPlayerPositions();
+    await fetchPlayerStatuses(userId);
+    await fetchCooldowns(userId);
   };
 
   // ========== END COMPREHENSIVE TECHNIQUE USAGE SYSTEM ==========
@@ -3986,6 +4721,25 @@ const Arena = () => {
                 </div>
               </div>
               
+              {/* Admin Self-Reset Button */}
+              {isAdmin && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="w-full mt-4"
+                  onClick={() => {
+                    const level = currentProfile?.level || 1;
+                    handleResetPlayerStats(
+                      userId,
+                      currentProfile?.username || "You",
+                      level
+                    );
+                  }}
+                >
+                  Reset My Stats
+                </Button>
+              )}
+              
               {/* Active Statuses */}
               {playerStatuses.length > 0 && (
                 <div className="mt-4 pt-4 border-t border-border">
@@ -4073,8 +4827,24 @@ const Arena = () => {
                 </div>
               )}
               
-              {/* Join Button - Always Visible When Session Exists */}
-              {!hasJoined && currentSession && (
+              {/* K.O. Lockout Screen */}
+              {koLockoutExpiry && new Date() < koLockoutExpiry && (
+                <div className="mt-4 p-4 bg-destructive/10 border-2 border-destructive rounded-lg text-center space-y-3">
+                  <img src={koImage} alt="K.O." className="w-20 h-20 mx-auto rounded-full object-cover" />
+                  <p className="text-lg font-bold text-destructive">You have been killed.</p>
+                  <p className="text-sm text-muted-foreground">
+                    Come back in {(() => {
+                      const remaining = Math.max(0, Math.floor((koLockoutExpiry.getTime() - Date.now()) / 1000));
+                      const mins = Math.floor(remaining / 60);
+                      const secs = remaining % 60;
+                      return `${mins}m ${secs}s`;
+                    })()}
+                  </p>
+                </div>
+              )}
+              
+              {/* Join Button - Always Visible When Session Exists (hidden during K.O. Lockout) */}
+              {!hasJoined && currentSession && !(koLockoutExpiry && new Date() < koLockoutExpiry) && (
               <Button 
                   onClick={handleJoinArena}
                 className="w-full mt-4"
@@ -4213,25 +4983,102 @@ const Arena = () => {
                           <Button
                             size="sm"
                             variant={selectedZoneTarget === zone.id ? "default" : "outline"}
-                            onClick={(e) => {
+                            onClick={async (e) => {
                               e.stopPropagation();
                               if (selectedZoneTarget === zone.id) {
                                 setSelectedZoneTarget(null);
-                                supabase
+                                const { error: untargetError } = await supabase
                                   .from("profiles")
                                   .update({ is_targeting_zone: false, current_target_zone_id: null })
                                   .eq("id", userId);
+                                if (untargetError) {
+                                  console.error("Failed to untarget zone:", untargetError);
+                                  // revert local state
+                                  setSelectedZoneTarget(zone.id);
+                                  const msg = (untargetError.message || "").toLowerCase();
+                                  const looksLikeMissingCols =
+                                    untargetError.code === "PGRST204" ||
+                                    msg.includes("is_targeting_zone") ||
+                                    msg.includes("current_target_zone_id");
+                                  toast({
+                                    title: "Error",
+                                    description: looksLikeMissingCols
+                                      ? "Zone targeting requires the Supabase migration `20251202000000_new_arena_system.sql` (profiles.current_target_zone_id + profiles.is_targeting_zone)."
+                                      : `Failed to untarget zone: ${untargetError.message || "Unknown error"}`,
+                                    variant: "destructive",
+                                  });
+                                  return;
+                                }
                               } else {
+                                // Costs 2 Mastery to target a zone (1.5 for Emperor)
+                                const zoneTargetCost = currentProfile?.discipline === "Emperor" ? 1.5 : 2;
+                                if (mastery < zoneTargetCost) {
+                                  toast({
+                                    title: "Insufficient Mastery",
+                                    description: `Targeting a zone costs ${zoneTargetCost} Mastery.`,
+                                    variant: "destructive",
+                                  });
+                                  return;
+                                }
+
+                                const newMastery = mastery - zoneTargetCost;
                                 setSelectedZoneTarget(zone.id);
                                 setCurrentTarget(null);
-                                supabase
+                                const { error: updateError } = await supabase
                                   .from("profiles")
                                   .update({ 
                                     is_targeting_zone: true, 
                                     current_target_zone_id: zone.id,
-                                    current_target_id: null
+                                    current_target_id: null,
+                                    mastery: newMastery,
                                   })
                                   .eq("id", userId);
+
+                                if (updateError) {
+                                  console.error("Failed to target zone:", updateError);
+                                  const msg = (updateError.message || "").toLowerCase();
+                                  const looksLikeMissingCols =
+                                    updateError.code === "PGRST204" ||
+                                    msg.includes("is_targeting_zone") ||
+                                    msg.includes("current_target_zone_id");
+                                  toast({
+                                    title: "Error",
+                                    description: looksLikeMissingCols
+                                      ? "Zone targeting requires the Supabase migration `20251202000000_new_arena_system.sql` (profiles.current_target_zone_id + profiles.is_targeting_zone)."
+                                      : `Failed to target zone: ${updateError.message || "Unknown error"}`,
+                                    variant: "destructive",
+                                  });
+                                  // revert local state
+                                  setSelectedZoneTarget(null);
+                                  return;
+                                }
+
+                                setMastery(newMastery);
+
+                                // Notify everyone in arena
+                                try {
+                                  const { data: posRows, error: posErr } = await supabase
+                                    .from("player_positions")
+                                    .select("user_id");
+                                  if (posErr) {
+                                    console.error("Failed to fetch arena participants for notifications:", posErr);
+                                  }
+                                  const uniqueUserIds = Array.from(
+                                    new Set((posRows || []).map((p: any) => p.user_id).filter(Boolean))
+                                  );
+                                  if (uniqueUserIds.length > 0 && currentProfile?.username) {
+                                    const message = `${currentProfile.username} is now targeting ${zoneNameFromImage}`;
+                                    const rows = uniqueUserIds.map((id) => ({
+                                      user_id: id,
+                                      message,
+                                      type: "zone_target",
+                                    }));
+                                    await supabase.from("notifications").insert(rows);
+                                  }
+                                } catch (err) {
+                                  console.error("Failed to broadcast zone target notification:", err);
+                                }
+
                                 toast({
                                   title: "Zone Targeted",
                                   description: `Targeting ${zoneNameFromImage}`,
@@ -4245,12 +5092,22 @@ const Arena = () => {
                       </div>
                       {playersInZone.length > 0 && (
                         <div className="flex flex-wrap gap-2 pl-4">
-                           {playersInZone.map((player) => (
+                           {playersInZone.map((player) => {
+                            // Check if player is K.O. or in K.O.Lockout
+                            const playerStatusList = player.user_id === userId 
+                              ? playerStatuses 
+                              : (playerStatusesMap[player.user_id] || []);
+                            const isKO = playerStatusList.some(
+                              s => (s.status === "K.O" || s.status === "K.O.Lockout") && 
+                                   s.expires_at && new Date(s.expires_at) > new Date()
+                            );
+                            
+                            return (
                             <div key={player.user_id} className="relative">
                               <Avatar 
                                 className={`w-10 h-10 border-2 cursor-pointer hover:border-primary transition-colors ${
                                       currentTarget === player.user_id ? 'border-destructive ring-2 ring-destructive' : 'border-border'
-                                }`}
+                                } ${isKO ? 'opacity-50' : ''}`}
                                 onClick={() => setShowPlayerPopup(showPlayerPopup === player.user_id ? null : player.user_id)}
                               >
                                       <AvatarImage
@@ -4261,7 +5118,17 @@ const Arena = () => {
                                         {player.profiles.username.substring(0, 2).toUpperCase()}
                                       </AvatarFallback>
                                     </Avatar>
-                                    {currentTarget === player.user_id && (
+                                    {/* K.O. Image Overlay */}
+                                    {isKO && (
+                                      <div className="absolute inset-0 flex items-center justify-center">
+                                        <img 
+                                          src={koImage} 
+                                          alt="K.O." 
+                                          className="w-10 h-10 rounded-full object-cover"
+                                        />
+                                      </div>
+                                    )}
+                                    {currentTarget === player.user_id && !isKO && (
                                       <div className="absolute -top-1 -right-1 w-4 h-4 bg-destructive rounded-full flex items-center justify-center">
                                         <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 20 20">
                                           <path d="M10 2a1 1 0 011 1v1.323l3.954 1.582 1.599-.8a1 1 0 01.894 1.79l-1.233.616 1.738 5.42a1 1 0 01-.285 1.05A3.989 3.989 0 0115 15a3.989 3.989 0 01-2.667-1.019 1 1 0 01-.285-1.05l1.738-5.42-1.233-.617a1 1 0 01.894-1.788l1.599.799L11 4.323V3a1 1 0 011-1zm-5 8.274l-.818 2.552c-.25.78-.08 1.632.428 2.192A3.989 3.989 0 007 16a3.989 3.989 0 002.417-1.019 1.988 1.988 0 00.428-2.192L9.5 10.274A1 1 0 009 10H6a1 1 0 00-.5.274z" />
@@ -4295,11 +5162,11 @@ const Arena = () => {
                                       <div className="space-y-1 text-sm">
                                         <div className="flex items-center justify-between">
                                           <span className="font-medium">HP:</span>
-                                          <span>{(player.profiles as any).current_hp || player.profiles.health}/{(player.profiles as any).max_hp || player.profiles.health}</span>
+                                          <span>{(player.profiles as any).current_hp ?? (player.profiles as any).max_hp ?? 100}/{(player.profiles as any).max_hp ?? 100}</span>
                                         </div>
                                         <div className="flex items-center justify-between">
                                           <span className="font-medium">ATK:</span>
-                                          <span>{(player.profiles as any).current_atk || 20}/{(player.profiles as any).max_atk || 20}</span>
+                                          <span>{(player.profiles as any).current_atk ?? 20}/{(player.profiles as any).max_atk ?? 20}</span>
                                         </div>
                                         <div className="flex items-center justify-between">
                                           <span className="font-medium">Armor:</span>
@@ -4429,8 +5296,17 @@ const Arena = () => {
                                             size="sm"
                                             variant="outline"
                                             className="w-full"
-                                            disabled={mastery < 3}
+                                            disabled={mastery < 3 || statusSystem.statusBlocksTeleport(playerStatuses.map(s => s.status))}
                                             onClick={async () => {
+                                              // Check Chaos-affected and other teleport-blocking statuses
+                                              if (statusSystem.statusBlocksTeleport(playerStatuses.map(s => s.status))) {
+                                                toast({
+                                                  title: "Cannot Teleport",
+                                                  description: "You cannot teleport with your current status effect.",
+                                                  variant: "destructive",
+                                                });
+                                                return;
+                                              }
                                               if (mastery < 3) {
                                                 toast({
                                                   title: "Insufficient Mastery",
@@ -4575,7 +5451,8 @@ const Arena = () => {
                                 </Dialog>
                               )}
                             </div>
-                          ))}
+                          );
+                          })}
                         </div>
                       )}
                     </div>
@@ -4609,6 +5486,21 @@ const Arena = () => {
                     Zone Signatures &amp; Codex
                   </Button>
                 </div>
+                
+                {/* Exit Arena Button */}
+                {hasJoined && (
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={handleExitArena}
+                    className="text-sm"
+                  >
+                    <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                    </svg>
+                    Exit
+                  </Button>
+                )}
                 
                 {/* Notification Bell */}
                 <div className="relative">
@@ -4745,7 +5637,13 @@ const Arena = () => {
                                 <>
                                   <span className="text-xs text-muted-foreground">→</span>
                                   <p className="font-semibold text-sm text-muted-foreground">
-                                    {zones.find(z => z.id === post.zone_id)?.name || ZONE_IMAGE_NAMES[zones.findIndex(z => z.id === post.zone_id) % ZONE_IMAGE_NAMES.length] || "Zone"}
+                                    {(() => {
+                                      const zoneIndex = zones.findIndex(z => z.id === post.zone_id);
+                                      if (zoneIndex !== -1) {
+                                        return ZONE_IMAGE_NAMES[zoneIndex % ZONE_IMAGE_NAMES.length];
+                                      }
+                                      return "Zone";
+                                    })()}
                                   </p>
                                 </>
                               )}
@@ -4959,6 +5857,7 @@ const Arena = () => {
                     const canUse = !isOnCooldown && 
                                   (tech.energy_cost || 0) <= (energy || 0) &&
                                   (!tech.no_use_m || mastery >= tech.no_use_m) &&
+                                  (!tech.no_use_e || energy >= tech.no_use_e) &&
                                   (!tags.includes("Combo") || mastery >= 1.5);
                     
                     return (
@@ -5023,9 +5922,20 @@ const Arena = () => {
                           {tech.mastery_taken > 0 && (
                             <p><span className="font-semibold">Mastery Taken:</span> -{tech.mastery_taken}</p>
                           )}
+                          {tech.self_damage > 0 && (
+                            <p className="text-destructive"><span className="font-semibold">Self Damage:</span> {tech.self_damage}</p>
+                          )}
+                          {tech.energy_taken > 0 && (
+                            <p><span className="font-semibold">Energy Taken:</span> -{tech.energy_taken}</p>
+                          )}
                           {tech.no_use_m && (
                             <p className={mastery < tech.no_use_m ? "text-destructive" : ""}>
                               <span className="font-semibold">Requires M:</span> {tech.no_use_m}
+                            </p>
+                          )}
+                          {tech.no_use_e && (
+                            <p className={energy < tech.no_use_e ? "text-destructive" : ""}>
+                              <span className="font-semibold">Requires Energy:</span> {tech.no_use_e}
                             </p>
                           )}
                           {tech.opponent_status && (
@@ -5064,6 +5974,9 @@ const Arena = () => {
                               {tech.no_use_m && mastery < tech.no_use_m && (
                                 <li>Insufficient Mastery (need {tech.no_use_m}, have {mastery.toFixed(2)})</li>
                               )}
+                              {tech.no_use_e && energy < tech.no_use_e && (
+                                <li>Insufficient Energy (need {tech.no_use_e}, have {energy || 0})</li>
+                              )}
                               {tags.includes("Combo") && mastery < 1.5 && (
                                 <li>Combo requires 1.5+ Mastery</li>
                               )}
@@ -5085,7 +5998,9 @@ const Arena = () => {
                 !selectedTechnique ||
                 (techniqueCooldowns[selectedTechnique || ""] && !timerSystem.isCooldownExpired(techniqueCooldowns[selectedTechnique || ""])) ||
                 (lastTechniqueTime && new Date().getTime() - lastTechniqueTime.getTime() < 60000) ||
-                statusSystem.statusBlocksTechniques(playerStatuses.map(s => s.status))
+                // Allow techniques when K.O. (Revival check happens in handler), block on K.O.Lockout
+                playerStatuses.some(s => s.status === "K.O.Lockout") ||
+                (statusSystem.statusBlocksTechniques(playerStatuses.map(s => s.status)) && !playerStatuses.some(s => s.status === "K.O"))
               }
             >
               Use Technique

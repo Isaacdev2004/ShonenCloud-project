@@ -16,6 +16,7 @@ export type StatusType =
   | "Silenced"
   | "Stasis"
   | "K.O"
+  | "K.O.Lockout"
   | "Element-affected"
   | "Launched Up"
   | "Shrouded"
@@ -30,106 +31,155 @@ export interface PlayerStatus {
   applied_by_mastery: number;
 }
 
-// Status effects that always last 2 minutes regardless of Mastery
 const ALWAYS_2_MIN_STATUSES: StatusType[] = ["Stunned", "Silenced"];
 
-// Calculate status duration based on Mastery
 export function calculateStatusDuration(mastery: number, status: StatusType): number {
-  // Stunned and Silenced always last 2 minutes
   if (ALWAYS_2_MIN_STATUSES.includes(status)) {
     return 2;
   }
-  
-  // If mastery is less than 1, default to 1 minute
   if (mastery < 1) {
     return 1;
   }
-  
-  // Otherwise, 1 M = 1 minute
   return Math.floor(mastery);
 }
 
-// Check if status blocks actions
+// Blocks actions: Attack, Move Around, Change Zone, Observe, Teleport
 export function statusBlocksActions(statuses: StatusType[]): boolean {
   return statuses.some(s => 
     s === "Stunned" || 
     s === "K.O" || 
-    s === "Grounded"
+    s === "K.O.Lockout" ||
+    s === "Grounded" ||
+    s === "Stasis"
   );
 }
 
-// Check if status blocks techniques
+// Blocks ALL techniques (Stunned, Silenced, K.O.Lockout, Stasis)
 export function statusBlocksTechniques(statuses: StatusType[]): boolean {
   return statuses.some(s => 
     s === "Stunned" || 
     s === "Silenced" || 
-    s === "K.O"
+    s === "K.O" ||
+    s === "K.O.Lockout" ||
+    s === "Stasis"
   );
 }
 
-// Check if status blocks specific technique tags
+// Blocks techniques with specific tags based on active statuses
 export function statusBlocksTechniqueTag(statuses: StatusType[], tag: string): boolean {
-  if (statuses.includes("Shrouded") && (tag === "Ranged" || tag === "Aoe")) {
+  const normalizedTag = tag.toLowerCase();
+  if (statuses.includes("Shrouded") && (normalizedTag === "ranged" || normalizedTag === "aoe")) {
     return true;
   }
-  if (statuses.includes("Launched Up") && tag === "Defensive") {
+  if (statuses.includes("Launched Up") && normalizedTag === "defensive") {
     return true;
   }
-  if (statuses.includes("Unwell") && tag === "Movement") {
+  if (statuses.includes("Unwell") && normalizedTag === "movement") {
+    return true;
+  }
+  if (statuses.includes("Bleeding") && (normalizedTag === "buff" || normalizedTag === "revival")) {
+    return true;
+  }
+  if (statuses.includes("Chaos-affected") && (normalizedTag === "combo" || normalizedTag === "setup")) {
     return true;
   }
   return false;
 }
 
-// Check if status allows hitting Airborne/Underground
+// Blocks zone changes (clicking on zone pictures)
+export function statusBlocksZoneChange(statuses: StatusType[]): boolean {
+  return statuses.some(s => 
+    s === "Stunned" ||
+    s === "K.O" ||
+    s === "K.O.Lockout" ||
+    s === "Grounded" ||
+    s === "Stasis"
+  );
+}
+
+// Blocks Teleport action specifically
+export function statusBlocksTeleport(statuses: StatusType[]): boolean {
+  return statuses.some(s => 
+    s === "Stunned" ||
+    s === "K.O" ||
+    s === "K.O.Lockout" ||
+    s === "Grounded" ||
+    s === "Stasis" ||
+    s === "Chaos-affected"
+  );
+}
+
 export function canHitAirborneUnderground(statuses: StatusType[]): boolean {
   return statuses.includes("Focused");
 }
 
-// Check if status ignores damage
+// Whether target ignores ALL damage (Shielded, Airborne, Underground)
+// Stasis is handled separately as a complete immunity
 export function statusIgnoresDamage(statuses: StatusType[]): boolean {
   return statuses.some(s => 
     s === "Shielded" || 
-    s === "Stasis" || 
     s === "Airborne" || 
     s === "Underground"
   );
 }
 
-// Check if status can be affected by AOE/SETUP
+// Stasis: complete immunity - can't take damage, can't be targeted, techniques don't affect them
+export function statusIsImmune(statuses: StatusType[]): boolean {
+  return statuses.includes("Stasis");
+}
+
+// Stasis: can't heal
+export function statusBlocksHealing(statuses: StatusType[]): boolean {
+  return statuses.includes("Stasis") || statuses.includes("Unwell");
+}
+
+// Stasis: can't attack
+export function statusBlocksAttacking(statuses: StatusType[]): boolean {
+  return statuses.includes("Stasis");
+}
+
+// Lethal: attack bypasses Armor and Aura, deals direct HP damage
+export function attackBypassesDefenses(statuses: StatusType[]): boolean {
+  return statuses.includes("Lethal");
+}
+
+// Reaping: ignores Armor, Aura, AND Shielded (but NOT Stasis)
+export function attackIgnoresEverything(statuses: StatusType[]): boolean {
+  return statuses.includes("Reaping");
+}
+
 export function canBeAffectedByAOE(statuses: StatusType[]): boolean {
   return !statuses.includes("Hidden");
 }
 
-// Get damage multiplier for status
 export function getDamageMultiplier(statuses: StatusType[], techniqueTags: string[]): number {
   let multiplier = 1;
+  const normalizedTags = techniqueTags.map(t => t.toLowerCase());
   
-  if (statuses.includes("Element-affected") && techniqueTags.includes("Elemental")) {
+  if (statuses.includes("Element-affected") && normalizedTags.includes("elemental")) {
     multiplier *= 1.5;
   }
-  if (statuses.includes("Analyzed") && techniqueTags.includes("Physical")) {
+  if (statuses.includes("Analyzed") && normalizedTags.includes("physical")) {
     multiplier *= 1.5;
   }
-  if (techniqueTags.includes("Setup") && statuses.some(s => s.includes("Aura"))) {
+  if (normalizedTags.includes("setup") && statuses.some(s => s.includes("Aura"))) {
     multiplier *= 1.5;
   }
   
   return multiplier;
 }
 
-// Get heal multiplier for status
 export function getHealMultiplier(statuses: StatusType[]): number {
   if (statuses.includes("Blessed")) {
     return 1.5;
   }
-  if (statuses.includes("Unwell")) {
-    return 0; // Cannot be healed
+  if (statuses.includes("Unwell") || statuses.includes("Stasis")) {
+    return 0;
   }
   return 1;
 }
 
-// Check if status prevents Armor/Energy gain
+// Weakened: blocks Energy AND Armor gain
 export function statusPreventsGain(statuses: StatusType[]): { armor: boolean; energy: boolean } {
   return {
     armor: statuses.includes("Weakened"),
@@ -137,27 +187,7 @@ export function statusPreventsGain(statuses: StatusType[]): { armor: boolean; en
   };
 }
 
-// Get periodic damage from statuses (per minute)
-export function getPeriodicDamage(statuses: StatusType[], currentHp: number): number {
-  if (statuses.includes("Bleeding")) {
-    return Math.floor(currentHp * 0.2); // 20% of current HP
-  }
-  return 0;
-}
-
-// Get periodic energy loss from statuses (per minute)
-export function getPeriodicEnergyLoss(statuses: StatusType[]): number {
-  if (statuses.includes("Chaos-affected")) {
-    return 2;
-  }
-  return 0;
-}
-
-// Get mastery loss from statuses (per minute)
-export function getMasteryLoss(statuses: StatusType[]): number {
-  if (statuses.includes("Launched Up")) {
-    return 0.25;
-  }
-  return 0;
-}
-
+// Weakened: blocks Energy AND Armor gain, and loses 4 ATK on apply
+// Bleeding: blocks BUFF/REVIVAL techniques (handled by statusBlocksTechniqueTag)
+// Chaos-affected: blocks COMBO/SETUP techniques + Teleport (handled by statusBlocksTechniqueTag + statusBlocksTeleport)
+// Launched Up: blocks DEFENSIVE techniques + loses 0.50 M on apply (handled in Arena.tsx)

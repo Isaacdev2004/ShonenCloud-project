@@ -55,6 +55,19 @@ Deno.serve(async (req) => {
       console.log('Successfully deleted old battle feed entries')
     }
 
+    // Delete notifications older than 1 hour
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString()
+    const { error: notificationsError } = await supabaseClient
+      .from('notifications')
+      .delete()
+      .lt('created_at', oneHourAgo)
+
+    if (notificationsError) {
+      console.error('Error deleting old notifications:', notificationsError)
+    } else {
+      console.log('Successfully deleted old notifications')
+    }
+
     return new Response(
       JSON.stringify({ success: true, message: 'Cleanup completed' }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }

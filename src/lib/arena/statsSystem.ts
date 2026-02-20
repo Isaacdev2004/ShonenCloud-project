@@ -1,9 +1,9 @@
 // Stats System for New Arena
 // Handles HP, ATK, Armor, Energy, Aura, Mastery calculations
 
-// Calculate max HP based on level
+// Calculate max HP based on level (+15 HP per level)
 export function calculateMaxHP(level: number): number {
-  return 100 + (level - 1) * 5;
+  return 100 + (level - 1) * 15;
 }
 
 // Calculate max ATK based on level
