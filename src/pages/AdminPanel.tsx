@@ -619,7 +619,7 @@ const AdminPanel = () => {
         ? (newTechnique.tags || []).join(", ") 
         : "";
 
-      const { error } = await supabase.from("techniques").insert({
+      const baseTechniquePayload = {
         name: newTechnique.name,
         description: newTechnique.description,
         price: newTechnique.price,
@@ -650,13 +650,40 @@ const AdminPanel = () => {
         no_use_m: newTechnique.no_use_m || null,
         atk_boost: newTechnique.atk_boost || 0,
         atk_debuff: newTechnique.atk_debuff || 0,
+      };
+
+      const extendedTechniquePayload = {
+        ...baseTechniquePayload,
         self_damage: newTechnique.self_damage || 0,
         energy_taken: newTechnique.energy_taken || 0,
-      });
+      };
+
+      let usedFallbackWithoutNewColumns = false;
+      let { error } = await supabase.from("techniques").insert(extendedTechniquePayload);
+
+      // Backward-compatible fallback while production DB/schema cache catches up.
+      if (error) {
+        const errorMessage = (error.message || "").toLowerCase();
+        const missingNewColumns =
+          error.code === "PGRST204" ||
+          (errorMessage.includes("schema cache") &&
+            (errorMessage.includes("energy_taken") || errorMessage.includes("self_damage")));
+
+        if (missingNewColumns) {
+          const fallback = await supabase.from("techniques").insert(baseTechniquePayload);
+          error = fallback.error;
+          if (!error) {
+            usedFallbackWithoutNewColumns = true;
+            toast.success("Technique added. Apply latest migration to enable Self Damage and Energy Taken storage.");
+          }
+        }
+      }
 
       if (error) throw error;
 
-      toast.success("Technique added successfully");
+      if (!usedFallbackWithoutNewColumns) {
+        toast.success("Technique added successfully");
+      }
       setNewTechnique({
         name: "",
         description: "",
@@ -703,46 +730,75 @@ const AdminPanel = () => {
         ? (editingTechnique.tags || []).join(", ") 
         : "";
 
-      const { error } = await supabase
+      const baseTechniquePayload = {
+        name: editingTechnique.name,
+        description: editingTechnique.description,
+        price: editingTechnique.price,
+        level_requirement: editingTechnique.level_requirement,
+        mentor_id: editingTechnique.mentor_id,
+        image_url: editingTechnique.image_url,
+        type_info: type_info, // Required field - convert tags array to comma-separated string
+        // New Arena System Fields
+        damage: editingTechnique.damage || 0,
+        armor_damage: editingTechnique.armor_damage || 0,
+        armor_given: editingTechnique.armor_given || 0,
+        aura_damage: editingTechnique.aura_damage || 0,
+        given_aura: editingTechnique.given_aura || 0,
+        heal: editingTechnique.heal || 0,
+        tags: editingTechnique.tags || [],
+        energy_cost: editingTechnique.energy_cost || 0,
+        energy_given: editingTechnique.energy_given || 0,
+        cooldown_minutes: editingTechnique.cooldown_minutes || 1,
+        opponent_status: editingTechnique.opponent_status || null,
+        self_status: editingTechnique.self_status || null,
+        no_hit_m: editingTechnique.no_hit_m || null,
+        specific_status_hit: editingTechnique.specific_status_hit || null,
+        mastery_given: editingTechnique.mastery_given || 0,
+        mastery_taken: editingTechnique.mastery_taken || 0,
+        no_hit_e: editingTechnique.no_hit_e || null,
+        no_use_e: editingTechnique.no_use_e || null,
+        no_use_m: editingTechnique.no_use_m || null,
+        atk_boost: editingTechnique.atk_boost || 0,
+        atk_debuff: editingTechnique.atk_debuff || 0,
+      };
+
+      const extendedTechniquePayload = {
+        ...baseTechniquePayload,
+        self_damage: editingTechnique.self_damage || 0,
+        energy_taken: editingTechnique.energy_taken || 0,
+      };
+
+      let usedFallbackWithoutNewColumns = false;
+      let { error } = await supabase
         .from("techniques")
-        .update({
-          name: editingTechnique.name,
-          description: editingTechnique.description,
-          price: editingTechnique.price,
-          level_requirement: editingTechnique.level_requirement,
-          mentor_id: editingTechnique.mentor_id,
-          image_url: editingTechnique.image_url,
-          type_info: type_info, // Required field - convert tags array to comma-separated string
-          // New Arena System Fields
-          damage: editingTechnique.damage || 0,
-          armor_damage: editingTechnique.armor_damage || 0,
-          armor_given: editingTechnique.armor_given || 0,
-          aura_damage: editingTechnique.aura_damage || 0,
-          given_aura: editingTechnique.given_aura || 0,
-          heal: editingTechnique.heal || 0,
-          tags: editingTechnique.tags || [],
-          energy_cost: editingTechnique.energy_cost || 0,
-          energy_given: editingTechnique.energy_given || 0,
-          cooldown_minutes: editingTechnique.cooldown_minutes || 1,
-          opponent_status: editingTechnique.opponent_status || null,
-          self_status: editingTechnique.self_status || null,
-          no_hit_m: editingTechnique.no_hit_m || null,
-          specific_status_hit: editingTechnique.specific_status_hit || null,
-          mastery_given: editingTechnique.mastery_given || 0,
-          mastery_taken: editingTechnique.mastery_taken || 0,
-          no_hit_e: editingTechnique.no_hit_e || null,
-          no_use_e: editingTechnique.no_use_e || null,
-          no_use_m: editingTechnique.no_use_m || null,
-          atk_boost: editingTechnique.atk_boost || 0,
-          atk_debuff: editingTechnique.atk_debuff || 0,
-          self_damage: editingTechnique.self_damage || 0,
-          energy_taken: editingTechnique.energy_taken || 0,
-        })
+        .update(extendedTechniquePayload)
         .eq("id", editingTechnique.id);
+
+      if (error) {
+        const errorMessage = (error.message || "").toLowerCase();
+        const missingNewColumns =
+          error.code === "PGRST204" ||
+          (errorMessage.includes("schema cache") &&
+            (errorMessage.includes("energy_taken") || errorMessage.includes("self_damage")));
+
+        if (missingNewColumns) {
+          const fallback = await supabase
+            .from("techniques")
+            .update(baseTechniquePayload)
+            .eq("id", editingTechnique.id);
+          error = fallback.error;
+          if (!error) {
+            usedFallbackWithoutNewColumns = true;
+            toast.success("Technique updated. Apply latest migration to enable Self Damage and Energy Taken storage.");
+          }
+        }
+      }
 
       if (error) throw error;
 
-      toast.success("Technique updated successfully");
+      if (!usedFallbackWithoutNewColumns) {
+        toast.success("Technique updated successfully");
+      }
       setEditingTechnique(null);
       fetchTechniques();
     } catch (error: any) {

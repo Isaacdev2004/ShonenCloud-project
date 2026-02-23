@@ -1484,7 +1484,12 @@ const Arena = () => {
             .eq("user_id", userId)
             .eq("session_id", syncedSession.id)
             .maybeSingle();
-          setHasJoined(!!participant);
+          const { data: position } = await supabase
+            .from("player_positions")
+            .select("user_id")
+            .eq("user_id", userId)
+            .maybeSingle();
+          setHasJoined(!!participant && !!position);
         }
         return;
       }
@@ -1515,7 +1520,12 @@ const Arena = () => {
           .eq("user_id", userId)
           .eq("session_id", openSession.id)
           .maybeSingle();
-        setHasJoined(!!participant);
+        const { data: position } = await supabase
+          .from("player_positions")
+          .select("user_id")
+          .eq("user_id", userId)
+          .maybeSingle();
+        setHasJoined(!!participant && !!position);
       }
       return;
     }
@@ -1556,7 +1566,12 @@ const Arena = () => {
           .eq("user_id", userId)
           .eq("session_id", lastSession.id)
           .maybeSingle();
-        setHasJoined(!!participant);
+        const { data: position } = await supabase
+          .from("player_positions")
+          .select("user_id")
+          .eq("user_id", userId)
+          .maybeSingle();
+        setHasJoined(!!participant && !!position);
       }
     } else {
         // No sessions exist - calculate the next open time from now
@@ -1824,14 +1839,12 @@ const Arena = () => {
       .delete()
       .eq("user_id", userId);
     
-    // Remove from arena_participants
-    if (currentSession) {
-      await supabase
-        .from("arena_participants")
-        .delete()
-        .eq("user_id", userId)
-        .eq("session_id", currentSession.id);
-    }
+    // Remove from arena_participants for every session row tied to this user.
+    // This avoids stale join state after refresh when session IDs roll over.
+    await supabase
+      .from("arena_participants")
+      .delete()
+      .eq("user_id", userId);
     
     // Clear target
     setCurrentTarget(null);
