@@ -36,18 +36,6 @@ import * as timerSystem from "@/lib/arena/timerSystem";
 import { getRandomMoveAroundResult, MOVE_AROUND_RESULTS } from "@/lib/arena/moveAroundResults";
 import { toast as sonnerToast } from "sonner";
 
-const zoneSignatureImages = [
-  { src: "https://i.ibb.co/tTkk6Mwy/Baschool-DONE.jpg", alt: "Baschool" },
-  { src: "https://i.ibb.co/PsBSSZ0s/Chunin-DONE.jpg", alt: "Chunin" },
-  { src: "https://i.ibb.co/vxzKKTpy/Hueco-DONE.jpg", alt: "Hueco" },
-  { src: "https://i.ibb.co/kgsBHd6h/Musutafu-DONE.jpg", alt: "Musutafu" },
-  { src: "https://i.ibb.co/wNrT6g4X/Namek-DONE2.jpg", alt: "Namek" },
-  { src: "https://i.ibb.co/9mk6mgfh/Scrap-DONE2.jpg", alt: "Scrap" },
-  { src: "https://i.ibb.co/TD7tdTSX/Shibuya-DONE.jpg", alt: "Shibuya" },
-  { src: "https://i.ibb.co/7JkkMy05/Testing-DONE.jpg", alt: "Testing" },
-];
-
-
 interface Profile {
   id: string;
   username: string;
@@ -182,7 +170,6 @@ const Arena = () => {
   const [unreadCount, setUnreadCount] = useState(0);
   const [showNotifications, setShowNotifications] = useState(false);
   const [currentTarget, setCurrentTarget] = useState<string | null>(null);
-  const [showZoneCodex, setShowZoneCodex] = useState(false);
   
   // New Arena System State
   const [hasJoined, setHasJoined] = useState(false);
@@ -201,6 +188,8 @@ const Arena = () => {
   const [lastActionTime, setLastActionTime] = useState<Date | null>(null);
   const [lastTechniqueTime, setLastTechniqueTime] = useState<Date | null>(null);
   const [showZoneSelectDialog, setShowZoneSelectDialog] = useState(false);
+  const [isJoinZoneSelection, setIsJoinZoneSelection] = useState(false);
+  const [pendingJoinSessionId, setPendingJoinSessionId] = useState<string | null>(null);
   const [koLockoutExpiry, setKoLockoutExpiry] = useState<Date | null>(null);
   
   // Stats state (using new system)
@@ -797,10 +786,7 @@ const Arena = () => {
 
     const currentMentorIds = userMentorsData?.map(um => um.mentor_id) || [];
 
-    // Then get techniques with ALL new fields
-    const { data, error } = await supabase
-      .from("user_techniques")
-      .select(`
+    const techniqueSelectWithNewColumns = `
         technique_id,
         techniques (
           id,
@@ -834,8 +820,64 @@ const Arena = () => {
           self_damage,
           energy_taken
         )
-      `)
+      `;
+
+    const techniqueSelectBase = `
+        technique_id,
+        techniques (
+          id,
+          name,
+          description,
+          cep,
+          type_info,
+          image_url,
+          mentor_id,
+          damage,
+          armor_damage,
+          armor_given,
+          aura_damage,
+          given_aura,
+          heal,
+          tags,
+          energy_cost,
+          energy_given,
+          cooldown_minutes,
+          opponent_status,
+          self_status,
+          no_hit_m,
+          specific_status_hit,
+          mastery_given,
+          mastery_taken,
+          no_hit_e,
+          no_use_e,
+          no_use_m,
+          atk_boost,
+          atk_debuff
+        )
+      `;
+
+    // Then get techniques with all fields, with backward-compatible fallback.
+    let { data, error } = await supabase
+      .from("user_techniques")
+      .select(techniqueSelectWithNewColumns)
       .eq("user_id", userId);
+
+    if (error) {
+      const errorMessage = (error.message || "").toLowerCase();
+      const missingNewColumns =
+        error.code === "PGRST204" ||
+        (errorMessage.includes("schema cache") &&
+          (errorMessage.includes("energy_taken") || errorMessage.includes("self_damage")));
+
+      if (missingNewColumns) {
+        const fallbackResult = await supabase
+          .from("user_techniques")
+          .select(techniqueSelectBase)
+          .eq("user_id", userId);
+        data = fallbackResult.data;
+        error = fallbackResult.error;
+      }
+    }
 
     if (error) {
       console.error("Error fetching user techniques:", error);
@@ -1203,17 +1245,6 @@ const Arena = () => {
       setUserActiveTitles(titlesWithImages);
     }
   };
-
-  const zoneSignatureImages = [
-    { src: "https://i.ibb.co/tTkk6Mwy/Baschool-DONE.jpg", alt: "Baschool" },
-    { src: "https://i.ibb.co/PsBSSZ0s/Chunin-DONE.jpg", alt: "Chunin" },
-    { src: "https://i.ibb.co/vxzKKTpy/Hueco-DONE.jpg", alt: "Hueco" },
-    { src: "https://i.ibb.co/kgsBHd6h/Musutafu-DONE.jpg", alt: "Musutafu" },
-    { src: "https://i.ibb.co/wNrT6g4X/Namek-DONE2.jpg", alt: "Namek" },
-    { src: "https://i.ibb.co/9mk6mgfh/Scrap-DONE2.jpg", alt: "Scrap" },
-    { src: "https://i.ibb.co/TD7tdTSX/Shibuya-DONE.jpg", alt: "Shibuya" },
-    { src: "https://i.ibb.co/7JkkMy05/Testing-DONE.jpg", alt: "Testing" },
-  ];
 
   const fetchArenaPosts = async () => {
     // Use new battle_feed table, but also keep arena_posts for backward compatibility
@@ -1647,6 +1678,83 @@ const Arena = () => {
     }
   };
   
+  const finalizeJoinArena = async (zoneId: string) => {
+    if (!userId || !pendingJoinSessionId) return;
+
+    const { error } = await supabase
+      .from("arena_participants")
+      .insert({
+        user_id: userId,
+        session_id: pendingJoinSessionId,
+      });
+
+    if (error && error.code !== "23505") {
+      toast({
+        title: "Error",
+        description: "Failed to join Arena: " + error.message,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setHasJoined(true);
+    setCurrentZone(zoneId);
+    setIsJoinZoneSelection(false);
+    setPendingJoinSessionId(null);
+    setShowZoneSelectDialog(false);
+
+    // Ensure the user has/keeps a position row in the selected zone.
+    const { data: existingPos } = await supabase
+      .from("player_positions")
+      .select("user_id")
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (!existingPos) {
+      const { error: posInsertError } = await supabase.from("player_positions").insert({
+        user_id: userId,
+        zone_id: zoneId,
+        last_moved_at: new Date().toISOString(),
+      });
+      if (posInsertError) {
+        console.error("Failed to create player position on join:", posInsertError);
+      }
+    } else {
+      await supabase
+        .from("player_positions")
+        .update({
+          zone_id: zoneId,
+          last_moved_at: new Date().toISOString(),
+        })
+        .eq("user_id", userId);
+    }
+
+    await fetchPlayerPositions();
+
+    toast({
+      title: "Joined Arena",
+      description: "You have successfully joined the Arena!",
+    });
+
+    // Send notification to all players in arena
+    const { data: posRows } = await supabase
+      .from("player_positions")
+      .select("user_id");
+    if (posRows && posRows.length > 0) {
+      const uniqueUserIds = Array.from(new Set(posRows.map((p: any) => p.user_id).filter(Boolean)));
+      const joinNotifications = uniqueUserIds
+        .filter((uid) => uid !== userId)
+        .map((uid) => ({
+          user_id: uid,
+          message: `${currentProfile?.username || "A member"} joined the Arena`,
+          type: "arena_join",
+        }));
+      if (joinNotifications.length > 0) {
+        await supabase.from("notifications").insert(joinNotifications);
+      }
+    }
+  };
+
   const handleJoinArena = async () => {
     if (!userId || !currentSession) return;
     
@@ -1695,114 +1803,30 @@ const Arena = () => {
         .single();
       
       if (createError || !newSession) {
-      toast({
-        title: "Error",
+        toast({
+          title: "Error",
           description: "Failed to create Arena session",
-        variant: "destructive",
-      });
-      return;
-    }
+          variant: "destructive",
+        });
+        return;
+      }
 
       sessionId = newSession.id;
       setCurrentSession(newSession);
     }
 
-    const { error } = await supabase
-      .from("arena_participants")
-      .insert({
-        user_id: userId,
-        session_id: sessionId,
-      });
-    
-    if (error) {
-      // Check if already joined
-      if (error.code === '23505') { // Unique constraint violation
-        setHasJoined(true);
-        toast({
-          title: "Already Joined",
-          description: "You are already in the Arena!",
-        });
-        // Still ensure the user has a player position row so combat permissions work
-        // (RLS policies check that the attacker has a player_positions row)
-        if (!currentZone && zones.length > 0) {
-          setCurrentZone(zones[0].id);
-        }
-        const zoneIdToUse = currentZone || zones[0]?.id;
-        if (zoneIdToUse) {
-          const { data: existingPos } = await supabase
-            .from("player_positions")
-            .select("user_id")
-            .eq("user_id", userId)
-            .maybeSingle();
-
-          if (!existingPos) {
-            await supabase.from("player_positions").insert({
-              user_id: userId,
-              zone_id: zoneIdToUse,
-              last_moved_at: new Date().toISOString(),
-            });
-          }
-          await fetchPlayerPositions();
-        }
-        return;
-      }
+    if (zones.length === 0) {
       toast({
         title: "Error",
-        description: "Failed to join Arena: " + error.message,
+        description: "No zones available. Please refresh and try again.",
         variant: "destructive",
       });
       return;
     }
 
-    setHasJoined(true);
-    toast({
-      title: "Joined Arena",
-      description: "You have successfully joined the Arena!",
-    });
-
-    // Ensure the user has a player position row immediately after joining.
-    // This prevents non-admin combat from being blocked by RLS (which checks player_positions).
-    if (!currentZone && zones.length > 0) {
-      setCurrentZone(zones[0].id);
-    }
-    const zoneIdToUse = currentZone || zones[0]?.id;
-    if (zoneIdToUse) {
-      const { data: existingPos } = await supabase
-        .from("player_positions")
-        .select("user_id")
-        .eq("user_id", userId)
-        .maybeSingle();
-
-      if (!existingPos) {
-        const { error: posInsertError } = await supabase.from("player_positions").insert({
-          user_id: userId,
-          zone_id: zoneIdToUse,
-          last_moved_at: new Date().toISOString(),
-        });
-        if (posInsertError) {
-          console.error("Failed to create player position on join:", posInsertError);
-        }
-      }
-      await fetchPlayerPositions();
-    }
-    
-    // Send notification to all players in arena
-    const { data: posRows } = await supabase
-      .from("player_positions")
-      .select("user_id");
-    if (posRows && posRows.length > 0) {
-      const uniqueUserIds = Array.from(new Set(posRows.map((p: any) => p.user_id).filter(Boolean)));
-      const joinNotifications = uniqueUserIds
-        .filter(uid => uid !== userId)
-        .map((uid) => ({
-          user_id: uid,
-          message: `${currentProfile?.username || "A member"} joined the Arena`,
-          type: "arena_join",
-        }));
-      if (joinNotifications.length > 0) {
-        await supabase.from("notifications").insert(joinNotifications);
-      }
-    }
+    setPendingJoinSessionId(sessionId);
+    setIsJoinZoneSelection(true);
+    setShowZoneSelectDialog(true);
   };
   
   const handleExitArena = async () => {
@@ -2443,10 +2467,10 @@ const Arena = () => {
             
             setVanishingToasts(prev => [...prev, toast]);
             
-            // Remove toast after 5 seconds
+            // Remove toast after 8 seconds
             setTimeout(() => {
               setVanishingToasts(prev => prev.filter(t => t.id !== toast.id));
-            }, 5000);
+            }, 8000);
           }
         }
       )
@@ -3017,20 +3041,83 @@ const Arena = () => {
       });
     }
   };
+
+  const tryApplyHiddenAtkBonus = async (targetUserId: string) => {
+    if (Math.random() >= 0.6) return;
+
+    const { data: profile, error } = await supabase
+      .from("profiles")
+      .select("current_atk, max_atk")
+      .eq("id", targetUserId)
+      .single();
+
+    if (error || !profile) {
+      console.error("Failed to load profile for Hidden bonus:", error);
+      return;
+    }
+
+    const currentAtk = (profile as any).current_atk ?? (profile as any).max_atk ?? 20;
+    const newAtk = currentAtk + 3;
+
+    const { error: updateError } = await supabase
+      .from("profiles")
+      .update({ current_atk: newAtk })
+      .eq("id", targetUserId);
+
+    if (updateError) {
+      console.error("Failed to apply Hidden ATK bonus:", updateError);
+      return;
+    }
+
+    if (targetUserId === userId) {
+      setCurrentATK(newAtk);
+      toast({
+        title: "Hidden Bonus",
+        description: "+3 ATK gained from Hidden.",
+      });
+    }
+  };
   
   const applyKOStatus = async (targetUserId: string) => {
+    const nowIso = new Date().toISOString();
+    const { data: activeLockout } = await supabase
+      .from("player_statuses")
+      .select("id")
+      .eq("user_id", targetUserId)
+      .eq("status", "K.O.Lockout")
+      .gt("expires_at", nowIso)
+      .maybeSingle();
+
+    if (activeLockout) {
+      return;
+    }
+
+    const { data: existingKO } = await supabase
+      .from("player_statuses")
+      .select("id")
+      .eq("user_id", targetUserId)
+      .eq("status", "K.O")
+      .gt("expires_at", nowIso)
+      .maybeSingle();
+
     // K.O. grace period: 2 minutes to use a Revival technique
     const gracePeriodMinutes = 2;
     const expiresAt = new Date();
     expiresAt.setMinutes(expiresAt.getMinutes() + gracePeriodMinutes);
     
-    await supabase.from("player_statuses").insert({
-      user_id: targetUserId,
-      status: "K.O",
-      applied_by_user_id: userId || null,
-      applied_by_mastery: 2,
-      expires_at: expiresAt.toISOString(),
-    });
+    if (!existingKO) {
+      const { error: koInsertError } = await supabase.from("player_statuses").insert({
+        user_id: targetUserId,
+        status: "K.O",
+        applied_by_user_id: userId || null,
+        applied_by_mastery: 2,
+        expires_at: expiresAt.toISOString(),
+      });
+      if (koInsertError) {
+        console.error("Failed to apply K.O status:", koInsertError);
+        return;
+      }
+    }
     
     // Get K.O'd player's username for notification
     const koPlayer = playerPositions.find(p => p.user_id === targetUserId);
@@ -3086,13 +3173,10 @@ const Arena = () => {
           .eq("user_id", targetUserId);
         
         // Also remove from arena_participants so they need to rejoin
-        if (currentSession?.id) {
-          await supabase
-            .from("arena_participants")
-            .delete()
-            .eq("user_id", targetUserId)
-            .eq("session_id", currentSession.id);
-        }
+        await supabase
+          .from("arena_participants")
+          .delete()
+          .eq("user_id", targetUserId);
         
         // If the kicked player is the current user, update local state
         if (targetUserId === userId) {
@@ -3337,6 +3421,7 @@ const Arena = () => {
             applied_by_mastery: mastery,
             expires_at: expiresAt.toISOString(),
           });
+          await tryApplyHiddenAtkBonus(userId);
           description += ` (Hidden for ${effect.duration || wholeMastery}min)`;
         }
         
@@ -4315,6 +4400,10 @@ const Arena = () => {
           const newATK = Math.max(0, currentTargetATK - 4);
           await supabase.from("profiles").update({ current_atk: newATK }).eq("id", targetId);
         }
+
+        if (techniqueData.opponent_status === "Hidden") {
+          await tryApplyHiddenAtkBonus(targetId);
+        }
       }
     }
     
@@ -4409,6 +4498,10 @@ const Arena = () => {
         applied_by_mastery: mastery,
         expires_at: expiresAt.toISOString(),
       });
+
+      if (techniqueData.self_status === "Hidden") {
+        await tryApplyHiddenAtkBonus(userId);
+      }
       
       // Refresh statuses
       await fetchPlayerStatuses(userId);
@@ -4637,7 +4730,7 @@ const Arena = () => {
     <div className="min-h-screen bg-background p-6">
       <div className="max-w-7xl mx-auto">
         {/* Vanishing Toasts */}
-        <div className="fixed top-4 right-4 z-50 space-y-2">
+        <div className="fixed bottom-4 right-4 z-50 space-y-2">
           {vanishingToasts.map((toast) => (
             <div
               key={toast.id}
@@ -5491,13 +5584,6 @@ const Arena = () => {
                   >
                     Cloudopedia
                   </Button>
-                  <Button
-                    onClick={() => setShowZoneCodex(true)}
-                    variant="outline"
-                    className="text-lg"
-                  >
-                    Zone Signatures &amp; Codex
-                  </Button>
                 </div>
                 
                 {/* Exit Arena Button */}
@@ -5766,44 +5852,6 @@ const Arena = () => {
         </div>
       </div>
 
-      {/* Zone Signatures & Codex Dialog */}
-      <Dialog open={showZoneCodex} onOpenChange={setShowZoneCodex}>
-        <DialogContent className="max-w-6xl w-[90vw] max-h-[85vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Zone Signatures and Codex Titles</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 text-sm text-foreground">
-            <p>Use the horizontal scrollbar to see the other images.</p>
-            <div className="bg-[#333] overflow-x-auto whitespace-nowrap p-3 rounded-lg border border-border">
-              {zoneSignatureImages.map((img) => (
-                <img
-                  key={img.src}
-                  src={img.src}
-                  alt={img.alt}
-                  className="inline-block mr-2 h-[218px] w-[400px] object-cover rounded-md border border-border"
-                />
-              ))}
-            </div>
-            <p>
-              Remember, you must stay inactive for the amount of time mentioned to complete a zone signature. And below are the titles that can be purchased in The Yards. They last 48 hours and will automatically disappear from your profile.
-            </p>
-            <p>
-              <a
-                href="https://ibb.co/6R8nMb13"
-                target="_blank"
-                rel="noreferrer"
-              >
-                <img
-                  src="https://i.ibb.co/XZD2Qp3h/Codex-1st-wave.png"
-                  alt="Codex 1st wave"
-                  className="max-w-full h-auto rounded-md border border-border"
-                />
-              </a>
-            </p>
-          </div>
-        </DialogContent>
-      </Dialog>
-
       {/* Use Technique Dialog */}
       <Dialog open={showActionDialog} onOpenChange={setShowActionDialog}>
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
@@ -5957,6 +6005,11 @@ const Arena = () => {
                           {tech.self_status && (
                             <p><span className="font-semibold">Self Status:</span> {tech.self_status}</p>
                           )}
+                          {tech.specific_status_hit && (
+                            <p className="text-destructive">
+                              <span className="font-semibold">Specific Status Hit:</span> {tech.specific_status_hit}
+                            </p>
+                          )}
                         </div>
                         
                         {/* Tags - Always show if tags exist, using persistent calculation */}
@@ -6023,10 +6076,19 @@ const Arena = () => {
       </Dialog>
 
       {/* Zone Select Dialog for Change Zone Action */}
-      <Dialog open={showZoneSelectDialog} onOpenChange={setShowZoneSelectDialog}>
+      <Dialog
+        open={showZoneSelectDialog}
+        onOpenChange={(open) => {
+          setShowZoneSelectDialog(open);
+          if (!open) {
+            setIsJoinZoneSelection(false);
+            setPendingJoinSessionId(null);
+          }
+        }}
+      >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Select Zone</DialogTitle>
+            <DialogTitle>{isJoinZoneSelection ? "Choose Starting Zone" : "Select Zone"}</DialogTitle>
           </DialogHeader>
           <div className="space-y-2">
             {zones.map((zone, index) => {
@@ -6039,10 +6101,14 @@ const Arena = () => {
                   variant={isCurrentZone ? "default" : "outline"}
                   className="w-full justify-start"
                   onClick={() => {
+                    if (isJoinZoneSelection) {
+                      finalizeJoinArena(zone.id);
+                      return;
+                    }
                     handleChangeZoneNew(zone.id);
                     setShowZoneSelectDialog(false);
                   }}
-                  disabled={isCurrentZone}
+                  disabled={!isJoinZoneSelection && isCurrentZone}
                 >
                   <img 
                     src={zoneImage} 
