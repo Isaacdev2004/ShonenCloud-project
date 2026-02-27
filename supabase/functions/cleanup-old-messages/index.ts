@@ -16,12 +16,12 @@ Deno.serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     )
 
-    // Delete global chat messages older than 2 hours
-    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString()
+    // Delete global chat messages older than 6 hours
+    const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString()
     const { error: chatError } = await supabaseClient
       .from('global_chat_messages')
       .delete()
-      .lt('created_at', twoHoursAgo)
+      .lt('created_at', sixHoursAgo)
 
     if (chatError) {
       console.error('Error deleting old chat messages:', chatError)

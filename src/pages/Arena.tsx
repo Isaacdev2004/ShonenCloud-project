@@ -1991,13 +1991,13 @@ const Arena = () => {
               const lockoutExpiresAt = new Date();
               lockoutExpiresAt.setMinutes(lockoutExpiresAt.getMinutes() + 30);
               
-              await supabase.from("player_statuses").insert({
+              await supabase.from("player_statuses").upsert({
                 user_id: userId,
                 status: "K.O.Lockout",
                 applied_by_user_id: userId,
                 applied_by_mastery: 0,
                 expires_at: lockoutExpiresAt.toISOString(),
-              });
+              }, { onConflict: "user_id,status" });
               
               // Remove from arena
               await supabase.from("player_positions").delete().eq("user_id", userId);
@@ -3092,7 +3092,7 @@ const Arena = () => {
       return;
     }
 
-    const { data: existingKO } = await supabase
+    const { data: activeKO } = await supabase
       .from("player_statuses")
       .select("id")
       .eq("user_id", targetUserId)
@@ -3100,20 +3100,49 @@ const Arena = () => {
       .gt("expires_at", nowIso)
       .maybeSingle();
 
+    if (activeKO) {
+      return;
+    }
+
     // K.O. grace period: 2 minutes to use a Revival technique
     const gracePeriodMinutes = 2;
     const expiresAt = new Date();
     expiresAt.setMinutes(expiresAt.getMinutes() + gracePeriodMinutes);
-    
-    if (!existingKO) {
-      const { error: koInsertError } = await supabase.from("player_statuses").insert({
+
+    // Remove expired K.O rows that could block writes when constraints exist.
+    await supabase
+      .from("player_statuses")
+      .delete()
+      .eq("user_id", targetUserId)
+      .eq("status", "K.O")
+      .lte("expires_at", nowIso);
+
+    const { error: koInsertError } = await supabase
+      .from("player_statuses")
+      .insert({
         user_id: targetUserId,
         status: "K.O",
         applied_by_user_id: userId || null,
         applied_by_mastery: 2,
         expires_at: expiresAt.toISOString(),
       });
-      if (koInsertError) {
+
+    if (koInsertError) {
+      if (koInsertError.code === "23505") {
+        const { error: koUpdateError } = await supabase
+          .from("player_statuses")
+          .update({
+            applied_by_user_id: userId || null,
+            applied_by_mastery: 2,
+            expires_at: expiresAt.toISOString(),
+          })
+          .eq("user_id", targetUserId)
+          .eq("status", "K.O");
+        if (koUpdateError) {
+          console.error("Failed to refresh K.O status:", koUpdateError);
+          return;
+        }
+      } else {
         console.error("Failed to apply K.O status:", koInsertError);
         return;
       }
@@ -3152,18 +3181,39 @@ const Arena = () => {
       if (koStatus) {
         // Still K.O'd - no Revival was used
         // Remove the K.O status and apply K.O.Lockout for 30 minutes
-        await supabase.from("player_statuses").delete().eq("id", koStatus.id);
+        await supabase
+          .from("player_statuses")
+          .delete()
+          .eq("user_id", targetUserId)
+          .eq("status", "K.O");
         
         const lockoutExpiresAt = new Date();
         lockoutExpiresAt.setMinutes(lockoutExpiresAt.getMinutes() + 30);
         
-        await supabase.from("player_statuses").insert({
-          user_id: targetUserId,
-          status: "K.O.Lockout",
-          applied_by_user_id: userId || null,
-          applied_by_mastery: 0,
-          expires_at: lockoutExpiresAt.toISOString(),
-        });
+        const { error: lockoutInsertError } = await supabase
+          .from("player_statuses")
+          .insert({
+            user_id: targetUserId,
+            status: "K.O.Lockout",
+            applied_by_user_id: userId || null,
+            applied_by_mastery: 0,
+            expires_at: lockoutExpiresAt.toISOString(),
+          });
+        if (lockoutInsertError) {
+          if (lockoutInsertError.code === "23505") {
+            await supabase
+              .from("player_statuses")
+              .update({
+                applied_by_user_id: userId || null,
+                applied_by_mastery: 0,
+                expires_at: lockoutExpiresAt.toISOString(),
+              })
+              .eq("user_id", targetUserId)
+              .eq("status", "K.O.Lockout");
+          } else {
+            console.error("Failed to apply K.O.Lockout:", lockoutInsertError);
+          }
+        }
         
         // Kick the player out of the Arena (remove from player_positions)
         // They disappear from zones and must click "Join Arena" again after lockout
