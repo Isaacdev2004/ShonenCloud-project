@@ -1951,8 +1951,7 @@ const Arena = () => {
       const { data, error } = await supabase
         .from("player_statuses")
         .select("*")
-        .eq("user_id", userId)
-        .gt("expires_at", new Date().toISOString());
+        .eq("user_id", userId);
       
       if (error) {
         // Only log non-network errors
@@ -1968,10 +1967,12 @@ const Arena = () => {
       }
       
       if (data) {
-        setPlayerStatuses(data as PlayerStatus[]);
+        const now = new Date();
+        const activeStatuses = (data as any[]).filter((s) => new Date(s.expires_at) > now) as PlayerStatus[];
+        setPlayerStatuses(activeStatuses);
         
         // Check for K.O.Lockout status - enforce lockout on page load/refresh
-        const lockout = data.find((s: any) => s.status === "K.O.Lockout" && new Date(s.expires_at) > new Date());
+        const lockout = data.find((s: any) => s.status === "K.O.Lockout" && new Date(s.expires_at) > now);
         if (lockout) {
           setKoLockoutExpiry(new Date(lockout.expires_at));
           // Ensure player is removed from arena during lockout
@@ -1983,21 +1984,40 @@ const Arena = () => {
           }
         } else {
           // Check for K.O. status (2-min grace period) - also check if it should have expired
-          const koStatus = data.find((s: any) => s.status === "K.O" && new Date(s.expires_at) <= new Date());
+          const koStatus = data.find((s: any) => s.status === "K.O" && new Date(s.expires_at) <= now);
           if (koStatus) {
             // K.O. grace period expired without Revival - transition to K.O.Lockout
-            // Remove expired K.O. status
-            supabase.from("player_statuses").delete().eq("id", koStatus.id).then(async () => {
+            // Remove all K.O rows first (expired or duplicate) then apply lockout.
+            supabase
+              .from("player_statuses")
+              .delete()
+              .eq("user_id", userId)
+              .eq("status", "K.O")
+              .then(async () => {
               const lockoutExpiresAt = new Date();
               lockoutExpiresAt.setMinutes(lockoutExpiresAt.getMinutes() + 30);
               
-              await supabase.from("player_statuses").upsert({
-                user_id: userId,
-                status: "K.O.Lockout",
-                applied_by_user_id: userId,
-                applied_by_mastery: 0,
-                expires_at: lockoutExpiresAt.toISOString(),
-              }, { onConflict: "user_id,status" });
+              const { error: lockoutInsertError } = await supabase
+                .from("player_statuses")
+                .insert({
+                  user_id: userId,
+                  status: "K.O.Lockout",
+                  applied_by_user_id: userId,
+                  applied_by_mastery: 0,
+                  expires_at: lockoutExpiresAt.toISOString(),
+                });
+
+              if (lockoutInsertError && lockoutInsertError.code === "23505") {
+                await supabase
+                  .from("player_statuses")
+                  .update({
+                    applied_by_user_id: userId,
+                    applied_by_mastery: 0,
+                    expires_at: lockoutExpiresAt.toISOString(),
+                  })
+                  .eq("user_id", userId)
+                  .eq("status", "K.O.Lockout");
+              }
               
               // Remove from arena
               await supabase.from("player_positions").delete().eq("user_id", userId);
